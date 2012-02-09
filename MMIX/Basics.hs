@@ -11,6 +11,7 @@
 -- module exports {{{
 
 module MMIX.Basics (
+  fI,
 -- machine types and fields {{{
   Octa, Tetra, Wyde, Byte,
   Addr, VAddr, PAddr, RAddr, BitIx, BitFld,
@@ -57,7 +58,7 @@ module MMIX.Basics (
 -- opcode type {{{
   OPType (..), opMap,
 -- }}}
--- the MMIX {{{
+-- the MMIX machine {{{
   MMIX (..),
   mmixGetPC, mmixSetPC,
   mmixGetSR, mmixSetSR,
@@ -69,7 +70,7 @@ module MMIX.Basics (
 -- virtual address mapping {{{
   vaddrFaddr, vaddrFseg, vaddrF63,
   pteFx, pteFay, pteFn, pteFp,
-  ptpFc, ptpFn, ptpFq,
+  ptpFc, ptpFn, ptpFq, ptpFnq,
 -- }}}
   ) where
 
@@ -894,6 +895,9 @@ ptpFn = (12,3)
 
 ptpFq :: BitFld
 ptpFq = (2,0)
+
+ptpFnq :: BitFld
+ptpFnq = (12,0)
 
 -- }}}
 

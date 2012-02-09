@@ -1,6 +1,6 @@
 -- Copyright 2012 Wu Xingbo <wuxb45@gmail.com>
 
-module OMem
+module MMIX.OMem
   ( OMem(..)
   , makeOMem
   , octaIx
