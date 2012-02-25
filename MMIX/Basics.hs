@@ -2047,7 +2047,7 @@ fpUnpacksef :: Octa -> Octa -> Octa -> FPInfo
 -- zero (e == 0 && f == 0)
 fpUnpacksef s 0 0 = Zero $ toFSign s
 -- subnormal (e == 0 && f > 0)
-fpUnpacksef s 0 f = traceShow f $ Number s' e' f'
+fpUnpacksef s 0 f = Number s' e' f'
   where
     s' = toFSign s
     (e', f') = fpAlignRaw (0, f `shiftL` 2)
@@ -2085,7 +2085,7 @@ sfpUnpacksef s 0 0 = Zero $ toFSign s
 sfpUnpacksef s 0 f = Number s' e' f'
   where
     s' = toFSign s
-    (e', f') = fpAlignRaw (0, f `shiftL` 2)
+    (e', f') = fpAlignRaw (925, f `shiftL` 2)
 -- inf (e == 255 && f == 0)
 sfpUnpacksef s 255 0 = Inf $ toFSign s
 -- nan (e == 255 && f > 0)
