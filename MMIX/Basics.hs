@@ -130,8 +130,9 @@ module MMIX.Basics (
   tripCheckO, tripCheckU, tripCheckZ, tripCheckX, 
   tripCheckList, tripCheck, tripCheckOne,
 -- }}}
--- ArithEx {{{
+-- arithmetic basis {{{
   ArithEx (..), cvAEtoT, cvAEtoBit,
+  Hexadeca (..),
 -- }}}
 -- floating-point {{{
   fpBsign, fpFsign, fpFe, fpFf, fpFse, fpBnan, fpFpl,
@@ -158,7 +159,7 @@ module MMIX.Basics (
   fpCompare, fpiCompare,
   fpEqual, fpiEqual,
   fpFix, fpiFix, fpFixu, fpiFixu,
-  fpFloat, fpFloatu,
+  fpFloat, fpFloatu, fpSFloat, fpSFloatu,
 -- }}}
   ) where
 
@@ -168,11 +169,12 @@ module MMIX.Basics (
 --import System.IO.Unsafe (unsafePerformIO)
 import Prelude
        ( Maybe (..), Bool (..), IO (..), Ord (..),
-         Integral (..), Ordering (..),
+         Integral (..), Ordering (..), Num (..), Real (..),
+         Enum (..), Bounded (..),
          Double, Float,
          (.), ($), (+), (-), (*), (/), (||), (&&),
          (>=), (<=), (<), (>),
-         fromIntegral, otherwise, fst, id,
+         fromIntegral, otherwise, fst, id, error,
        )
 import Control.Applicative (Applicative (..), (<$>), (<*>))
 import Control.Monad (Monad (..), Functor (..), (>>=),
@@ -187,6 +189,7 @@ import Data.List (filter, map, head, zip, (++), nub)
 import Data.Int (Int, Int64, Int32, Int16, Int8)
 import Data.Maybe (catMaybes, fromMaybe)
 import qualified Data.Map as Map (Map, fromList, (!))
+import Data.Ratio ((%))
 import Data.String (String (..))
 import Data.Word (Word64, Word32, Word16, Word8)
 import Data.IORef (IORef, readIORef, writeIORef, newIORef)
@@ -1853,6 +1856,85 @@ cvAEtoBit :: ArithEx -> Octa
 cvAEtoBit = tripAEBit . cvAEtoT
 -- }}}
 
+-- Hexadeca: 128-bit number for mul/div {{{
+
+data Hexadeca = HD Octa Octa deriving (Eq, Ord)
+
+instance Bounded Hexadeca where
+  minBound = HD 0 0
+  maxBound = HD (-1) (-1)
+
+instance Enum Hexadeca where
+  succ (HD (-1) (-1)) = error "Hexadeca.succ maxBound: bad argument"
+  succ hd = hd + (HD 0 1)
+
+  pred (HD 0 0) = error "Hexadeca.pred minBound: bad argument"
+  pred hd = hd - (HD 0 1)
+
+  toEnum n =
+    if n > 0
+    then HD 0 (cast n)
+    else error "Hexadeca.toEnum: bad argument"
+  fromEnum (HD h l) =
+    if h == 0 && l `shiftR` 63 == 0
+    then cast l
+    else error "Hexadeca.fromEnum: bad argument"
+
+instance Num Hexadeca where
+  (HD ah al) + (HD bh bl) = HD h l
+    where
+      l = al + bl
+      h = if l < al then ah + bh + 1 else ah + bh
+
+  (HD ah al) - (HD bh bl) = HD h l
+    where
+      l = al - bl
+      h = if l > al then ah - bh - 1 else ah - bh
+
+  (HD ah al) * (HD bh bl) = HD h l
+    where
+      l = al * bl
+      h = al * bh + ah * bl
+  abs = id
+  signum (HD 0 0) = 0
+  signum _ = 1
+  fromInteger i = HD (cast $ i `shiftR` 64) (cast i)
+
+
+instance Real Hexadeca where
+  toRational hd = toInteger hd % 1
+
+
+instance Bits Hexadeca where
+  (HD ah al) .&. (HD bh bl) = HD (ah .&. bh) (al .&. bl)
+  (HD ah al) .|. (HD bh bl) = HD (ah .|. bh) (al .|. bl)
+  (HD ah al) `xor` (HD bh bl) = HD (ah `xor` bh) (al `xor` bl)
+  complement (HD h l) = HD (complement h) (complement l)
+  hd `shift` b = fromInteger $ toInteger hd `shift` b
+  hd `rotate` b = (hd `shift` b0) .|. (hd `shift` b1)
+    where b0 = b `rem` 128
+          b1 | b >= 0 = b0 - 128
+             | b < 0 = b0 + 128
+  bitSize _ = 128
+  isSigned _ = False
+
+instance Integral Hexadeca where
+  quotRem a (HD 0 0) = error "Hexadeca.quotRem: bad argument"
+  quotRem a b = qrIter a
+    where
+      qrIter r = if r < b then (HD 0 0, r) else (dq + q', r')
+        where (dq, dr) = maxExp r (HD 0 1) b
+              (q', r') = qrIter (r - dr)
+      maxExp ra x r = if ra < r2 then (x, r) else maxExp rall x2 r2
+        where x2 = x * (HD 0 2)
+              r2 = r * (HD 0 2)
+  toInteger (HD h l) = ((toInteger h) `shiftL` 64) .|. (toInteger l)
+
+instance Show Hexadeca where
+  show hd = show $ toInteger hd
+
+-- }}}
+
 -- }}}
 
 -- floating-point {{{
@@ -2436,6 +2518,22 @@ fpiSub r a b = case b of
 
 -- }}}
 
+-- fpMult {{{
+
+-- fpMult {{{
+fpMult :: RoundMode -> FP -> FP -> ArithRx FP
+fpMult r a b = fpiMult r (fpUnpack a) (fpUnpack b)
+-- }}}
+
+-- fpiMult {{{
+fpiMult :: RoundMode -> FPInfo -> FPInfo -> ArithRx FP
+fpiMult r a@(Number as ae af) b@(Number bs be bf) =
+  return 0
+  
+-- }}}
+
+-- }}}
+
 -- fpCompare {{{
 
 -- fpCompare {{{
@@ -2572,11 +2670,11 @@ fpiFixu r a = ArithRx ex' rx
 
 fpFloat :: RoundMode -> Octa -> ArithRx FP
 fpFloat r 0 = return fpPZero
-fpFloat r o = fpPack r (Number s e' f')
+fpFloat r o = fpPack r (Number s e f)
   where
     s = if bitGet 63 o == 0 then FPositive else FNegative
-    f = if s == FPositive then o else (-o)
-    (e', f') = fpAlignRaw (1076, f)
+    u = if s == FPositive then o else (-o)
+    (e, f) = fpAlignRaw (1076, u)
 
 -- }}}
 
@@ -2591,11 +2689,28 @@ fpFloatu r o = fpPack r (Number s e f)
 
 -- }}}
 
--- fpSFloat: Octa -> SFP (Octa as signed) {{{
-
-
+-- fpSFloat: Octa -> FP (notice: not SFP) {{{
+fpSFloat :: RoundMode -> Octa -> ArithRx FP
+fpSFloat r 0 = return fpPZero
+fpSFloat r o = sfpPack r (Number s e f) >>= fpPack r . sfpUnpack
+  where
+    s = if bitGet 63 o == 0 then FPositive else FNegative
+    u = if s == FPositive then o else (-o)
+    (e, f) = fpAlignRaw (1076, u)
 
 -- }}}
+
+-- fpSFloatu: Octa -> FP (notice: not SFP) {{{
+fpSFloatu :: RoundMode -> Octa -> ArithRx FP
+fpSFloatu r 0 = return fpPZero
+fpSFloatu r o = sfpPack r (Number s e f) >>= fpPack r . sfpUnpack
+  where
+    s = FPositive
+    (e, f) = fpAlignRaw (1076, o)
+
+-- }}}
+
+
 
 -- }}}
 
