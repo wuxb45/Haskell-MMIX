@@ -137,7 +137,8 @@ module MMIX.Basics (
 -- floating-point {{{
   fpBsign, fpFsign, fpFe, fpFf, fpFse, fpBnan, fpFpl,
   RoundMode (..), toRoundMode,
-  FSign (..), toFSign, toFSignRaw, fpSetFSignRaw, sfpSetFSignRaw,
+  FSign (..), toFSign, toFSignRaw, fpSetFSignRaw,
+  sfpSetFSignRaw, mdFSign,
   NaNType (..), fpToNaN, fpToNaNRaw, sfpToNaNRaw, fpSetNaNRaw, fpSetNaNPayload,
   FPInfo (..),
   fpUnpack, fpPack, sfpUnpack, sfpPack,
@@ -1891,15 +1892,45 @@ instance Num Hexadeca where
       l = al - bl
       h = if l > al then ah - bh - 1 else ah - bh
 
+  a * b = fromInteger $ toInteger a * toInteger b
+
+-- very slow mult {{{
+-- XXX: keep this shit
+--          ######m7
+--        ######m6
+--      ######m5
+--    ######m4
+--  ######m3
+--  ####m2
+--  ##m1
+{- Too slow with div
   (HD ah al) * (HD bh bl) = HD h l
     where
-      l = al * bl
-      h = al * bh + ah * bl
+      cast2 (t1,t2) = (cast t1 :: Octa, cast t2 :: Octa)
+      (a1,a2) = cast2 $ cvot ah
+      (a3,a4) = cast2 $ cvot al
+      (b1,b2) = cast2 $ cvot bh
+      (b3,b4) = cast2 $ cvot bl
+      m67 = HD 0 (a4 * b4) + (m6 `shift` 16)
+      m6  = HD 0 (a4 * b3) + HD 0 (a3 * b4)
+      m45 = HD 0 (a4 * b2) + HD 0 (a3 * b3)
+          + HD 0 (a2 * b4) + (m4 `shift` 16)
+      m4  = HD 0 (a4 * b1) + HD 0 (a3 * b2) 
+          + HD 0 (a2 * b3) + HD 0 (a1 * b4)
+      m23 = HD 0 (a3 * b1) + HD 0 (a2 * b2)
+          + HD 0 (a1 * b3) + (m2 `shift` 16)
+      m2  = HD 0 (a2 * b1) + HD 0 (a1 * b2)
+      m01  = HD 0 (a1 * b1)
+      (HD _ l) = m67 + (m45 `shiftL` 32)
+      (HD h _) = (m01 `shiftL` 32) + m23
+               + (m45 `shiftR` 32) + (m67 `shiftR` 64)
+-}
+-- }}}
+
   abs = id
   signum (HD 0 0) = 0
   signum _ = 1
   fromInteger i = HD (cast $ i `shiftR` 64) (cast i)
-
 
 instance Real Hexadeca where
   toRational hd = toInteger hd % 1
@@ -1910,7 +1941,12 @@ instance Bits Hexadeca where
   (HD ah al) .|. (HD bh bl) = HD (ah .|. bh) (al .|. bl)
   (HD ah al) `xor` (HD bh bl) = HD (ah `xor` bh) (al `xor` bl)
   complement (HD h l) = HD (complement h) (complement l)
-  hd `shift` b = fromInteger $ toInteger hd `shift` b
+  (HD h l) `shift` b = HD h' l'
+    where
+      h' | b >= 0 = (h `shift` b) .|. (l `shift` (b - 64))
+         | otherwise = (h `shift` b)
+      l' | b >= 0 = (l `shift` b)
+         | otherwise = (h `shift` (b + 64)) .|. (l `shift` b)
   hd `rotate` b = (hd `shift` b0) .|. (hd `shift` b1)
     where b0 = b `rem` 128
           b1 | b >= 0 = b0 - 128
@@ -1919,19 +1955,28 @@ instance Bits Hexadeca where
   isSigned _ = False
 
 instance Integral Hexadeca where
+  quotRem a b = (fromInteger q, fromInteger r)
+    where (q, r) = quotRem (toInteger a) (toInteger b)
+
+-- very slow quot/rem (div) {{{
+-- XXX: keep this shit.
+{-
   quotRem a (HD 0 0) = error "Hexadeca.quotRem: bad argument"
   quotRem a b = qrIter a
     where
       qrIter r = if r < b then (HD 0 0, r) else (dq + q', r')
         where (dq, dr) = maxExp r (HD 0 1) b
               (q', r') = qrIter (r - dr)
-      maxExp ra x r = if ra < r2 then (x, r) else maxExp rall x2 r2
+      maxExp ra x r = if ra < r2 then (x, r) else maxExp ra x2 r2
         where x2 = x * (HD 0 2)
               r2 = r * (HD 0 2)
+-}
+-- }}}
+
   toInteger (HD h l) = ((toInteger h) `shiftL` 64) .|. (toInteger l)
 
 instance Show Hexadeca where
-  show hd = show $ toInteger hd
+  show hd = hx $ toInteger hd
 
 -- }}}
 
@@ -2054,6 +2099,11 @@ sfpSetFSignRaw FNegative v = bitSet sfpBsign 1 v
 flipFSign :: FSign -> FSign
 flipFSign FPositive = FNegative
 flipFSign FNegative = FPositive
+-- }}}
+
+-- mul/div sign {{{
+mdFSign :: FSign -> FSign -> FSign
+mdFSign as bs = if as == bs then FPositive else FNegative
 -- }}}
 
 -- }}}
@@ -2451,17 +2501,17 @@ fpiAdd _ a@(Number _ _ _) b@(Zero _) = fpPack RZero a
 fpiAdd r a@(Zero as) b@(Zero bs) =
   if as == bs then fpPack r a
   else return $ if r == RDown then fpNZero else fpPZero
+-- any NaN -> NaN
+fpiAdd r a@(NaN _ _ _) b@(NaN _ _ _) =
+  fpPack r $ if fpiIsSNaN a then a else b
+fpiAdd r a@(NaN _ _ _) _ = fpPack r a
+fpiAdd r _ b@(NaN _ _ _) = fpPack r b
 -- any Inf -> Inf; +Inf-Inf=NaN
 fpiAdd r a@(Inf as) b@(Inf bs) =
   if as /= bs then fpPack r $ NaN bs SignalNaN 0
   else fpPack r b
 fpiAdd r a@(Inf as) _ = fpPack r a
 fpiAdd r _ b@(Inf bs) = fpPack r b
--- any NaN -> NaN
-fpiAdd r a@(NaN _ _ _) b@(NaN _ _ _) =
-  fpPack r $ if fpiIsSNaN a then a else b
-fpiAdd r a@(NaN _ _ _) _ = fpPack r a
-fpiAdd r _ b@(NaN _ _ _) = fpPack r b
 
 -- fpAddRaw: helper for num + num {{{
 fpAddRaw :: RoundMode
@@ -2527,9 +2577,40 @@ fpMult r a b = fpiMult r (fpUnpack a) (fpUnpack b)
 
 -- fpiMult {{{
 fpiMult :: RoundMode -> FPInfo -> FPInfo -> ArithRx FP
-fpiMult r a@(Number as ae af) b@(Number bs be bf) =
-  return 0
-  
+-- Number
+fpiMult r (Number as ae af) (Number bs be bf) = fpPack r (Number s e f)
+  where
+    s = mdFSign as bs
+    (HD h l) = (HD 0 af) * (HD 0 bf `shiftL` 9)
+    (e, f) =
+      if fldGet (63,54) h == 0
+      then (ae + be - 1022, (h `shiftL` 1) .|. tbit)
+      else (ae + be - 1021, h .|. tbit)
+    tbit = if l == 0 then 0 else 1
+-- Number * Zero = Zero
+fpiMult r (Number as _ _) (Zero bs) = fpPack r (Zero s)
+  where s = mdFSign as bs
+fpiMult r (Zero as) (Number bs _ _) = fpPack r (Zero s)
+  where s = mdFSign as bs
+fpiMult r (Zero as) (Zero bs) = fpPack r (Zero s)
+  where s = mdFSign as bs
+-- Inf * not Zero -> Inf
+fpiMult r (Inf as) (Number bs _ _) = fpPack r (Inf s)
+  where s = mdFSign as bs
+fpiMult r (Number as _ _) (Inf bs) = fpPack r (Inf s)
+  where s = mdFSign as bs
+fpiMult r (Inf as) (Inf bs) = fpPack r (Inf s)
+  where s = mdFSign as bs
+-- Inf * Zero -> NaN
+fpiMult r (Inf as) (Zero bs) = fpPack r (NaN s SignalNaN 0)
+  where s = mdFSign as bs
+fpiMult r (Zero as) (Inf bs) = fpPack r (NaN s SignalNaN 0)
+  where s = mdFSign as bs
+-- NaN -> NaN
+fpiMult r a@(NaN _ _ _) b@(NaN _ _ _) =
+  fpPack r $ if fpiIsSNaN a then a else b
+fpiMult r a@(NaN _ _ _) _ = fpPack r a
+fpiMult r _ b@(NaN _ _ _) = fpPack r b
 -- }}}
 
 -- }}}
@@ -2709,8 +2790,6 @@ fpSFloatu r o = sfpPack r (Number s e f) >>= fpPack r . sfpUnpack
     (e, f) = fpAlignRaw (1076, o)
 
 -- }}}
-
-
 
 -- }}}
 
