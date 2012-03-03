@@ -458,24 +458,6 @@ incPC mmix = do
 
 -- Arithmetic function warppers {{{
 
--- warp fpCompare
-fpCompare' :: FP -> FP -> (Octa, [ArithEx])
-fpCompare' a b = (toOcta o, ex)
-  where
-    (o,ex) = fpCompare a b
-    toOcta LT = (-1)
-    toOcta EQ = 0
-    toOcta GT = 1
-
--- warp fpEqual
-fpEqual' :: FP -> FP -> Octa
-fpEqual' a b = case fpEqual a b of
-  True  -> 1
-  False -> 0
-
---get RoundMode from SR value
-getRoundMode :: Octa -> RoundMode
-getRoundMode = toRoundMode . fldGet rAFRoundMode
 
 -- }}}
 
@@ -488,7 +470,7 @@ type RunInsn = MMIX -> Insn -> IO ()
 -- TRAP 'trap' {{{
 runTRAP :: RunInsn
 runTRAP mmix insn = do
-  npc <- (+ 4) `fmap` mmixGetPC mmix
+  npc <- (+ 4) <$> mmixGetPC mmix
   doFTrap mmix insn npc
 -- }}}
 
@@ -496,9 +478,9 @@ runTRAP mmix insn = do
 runFCMP :: RunInsn
 runFCMP mmix insn = do
   (y,z) <- mmixGetGRFYZ mmix insn
-  let (o, exs) = fpCompare' y z
-  mapM (issueTrip mmix) exs
-  mmixSetGRX mmix insn o
+  let re = fromOrdering <$> fpCompare y z
+  mapM (issueTrip mmix) $ arithGetEx re
+  mmixSetGRX mmix insn $ arithGetRx re
   incPC mmix
 -- }}}
 
@@ -516,14 +498,14 @@ runFUN mmix insn = do
 runFEQL :: RunInsn
 runFEQL mmix insn = do
   (y,z) <- mmixGetGRFYZ mmix insn
-  mmixSetGRX mmix insn $ fpEqual' y z
+  mmixSetGRX mmix insn $ fromBool $ fpEqual y z
   incPC mmix
 -- }}}
   
 -- FADD 'floating add' {{{
 runFADD :: RunInsn
 runFADD mmix insn = do
-  rdm <- getRoundMode `fmap` mmixGetSR mmix rAIx
+  rdm <- toRoundModeRaw <$> mmixGetSR mmix rAIx
   (y,z) <- mmixGetGRFYZ mmix insn
   let re = fpAdd rdm y z
   mapM (issueTrip mmix) $ arithGetEx re
@@ -534,7 +516,7 @@ runFADD mmix insn = do
 -- FIX 'convert floating to fixed' {{{
 runFIX :: RunInsn
 runFIX mmix insn = do
-  rdm <- getRoundMode `fmap` mmixGetSR mmix rAIx
+  rdm <- toRoundModeRaw <$> mmixGetSR mmix rAIx
   z <- mmixGetGRFZ mmix insn
   let re = fpFix rdm z
   mapM (issueTrip mmix) $ arithGetEx re
@@ -545,7 +527,7 @@ runFIX mmix insn = do
 -- FSUB 'floating subtract' {{{
 runFSUB :: RunInsn
 runFSUB mmix insn = do
-  rdm <- getRoundMode `fmap` mmixGetSR mmix rAIx
+  rdm <- toRoundModeRaw <$> mmixGetSR mmix rAIx
   (y,z) <- mmixGetGRFYZ mmix insn
   let re = fpSub rdm y z
   mapM (issueTrip mmix) $ arithGetEx re
@@ -556,7 +538,7 @@ runFSUB mmix insn = do
 -- FIXU 'convert floating to fixed unsigned' {{{
 runFIXU :: RunInsn
 runFIXU mmix insn = do
-  rdm <- getRoundMode `fmap` mmixGetSR mmix rAIx
+  rdm <- toRoundModeRaw <$> mmixGetSR mmix rAIx
   z <- mmixGetGRFZ mmix insn
   let re = fpFixu rdm z
   mapM (issueTrip mmix) $ arithGetEx re
@@ -604,49 +586,99 @@ runFLOTUI mmix insn = do
   incPC mmix
 -- }}}
 
--- SFLOT {{{
+-- SFLOT 'convert fixed to short float' {{{
 runSFLOT :: RunInsn
 runSFLOT mmix insn = do
+  z <- mmixGetGRZ mmix insn
+  let re = fpSFloat z
+  mapM (issueTrip mmix) $ arithGetEx re
+  mmixSetGRFX mmix insn $ arithGetRx re
+  incPC mmix
 -- }}}
 
--- SFLOTI {{{
+-- SFLOTI 'convert fixed to short float immediate' {{{
 runSFLOTI :: RunInsn
 runSFLOTI mmix insn = do
+  let z = iGetZs insn
+  let re = fpSFloat z
+  mapM (issueTrip mmix) $ arithGetEx re
+  mmixSetGRFX mmix insn $ arithGetRx re
+  incPC mmix
 -- }}}
 
--- SFLOTU {{{
+-- SFLOTU 'convert fixed to short float unsigned ' {{{
 runSFLOTU :: RunInsn
 runSFLOTU mmix insn = do
+  z <- mmixGetGRZ mmix insn
+  let re = fpSFloatu z
+  mapM (issueTrip mmix) $ arithGetEx re
+  mmixSetGRFX mmix insn $ arithGetRx re
+  incPC mmix
 -- }}}
 
--- SFLOTUI {{{
+-- SFLOTUI 'convert fixed to short float unsigned immediate' {{{
 runSFLOTUI :: RunInsn
 runSFLOTUI mmix insn = do
+  let z = iGetZu insn
+  let re = fpSFloatu z
+  mapM (issueTrip mmix) $ arithGetEx re
+  mmixSetGRFX mmix insn $ arithGetRx re
+  incPC mmix
 -- }}}
 
--- FMUL {{{
+-- FMUL 'floating multiply' {{{
 runFMUL :: RunInsn
 runFMUL mmix insn = do
+  rdm <- toRoundModeRaw <$> mmixGetSR mmix rAIx
+  (y,z) <- mmixGetGRFYZ mmix insn
+  let re = fpMult rdm y z
+  mapM (issueTrip mmix) $ arithGetEx re
+  mmixSetGRFX mmix insn $ arithGetRx re
+  incPC mmix
 -- }}}
 
--- FCMPE {{{
+-- FCMPE 'floating compare (with respect to epsilon)' {{{
 runFCMPE :: RunInsn
 runFCMPE mmix insn = do
+  (y,z) <- mmixGetGRFYZ mmix insn
+  e <- mmixGetSRF mmix rEIx
+  let re = fpCompareEps e y z
+  mapM (issueTrip mmix) $ arithGetEx re
+  mmixSetGRX mmix insn $ arithGetRx re
+  incPC mmix
 -- }}}
 
--- FUNE {{{
+-- FUNE 'floating unordered (with respect to epsilon)' {{{
 runFUNE :: RunInsn
 runFUNE mmix insn = do
+  (y,z) <- mmixGetGRFYZ mmix insn
+  e <- mmixGetSRF mmix rEIx
+  if fpUnorderedEps e y z
+  then mmixSetGRX mmix insn 1 -- unordered
+  else mmixSetGRX mmix insn 0 -- ordered
+  incPC mmix
 -- }}}
 
--- FEQLE {{{
+-- FEQLE 'floating equivalent (with respect to epsilon)' {{{
 runFEQLE :: RunInsn
 runFEQLE mmix insn = do
+  (y,z) <- mmixGetGRFYZ mmix insn
+  e <- mmixGetSRF mmix rEIx
+  let re = fpEqualEps e y z
+  mapM (issueTrip mmix) $ arithGetEx re
+  mmixSetGRX mmix insn $ arithGetRx re
+  incPC mmix
 -- }}}
 
--- FDIV {{{
+-- FDIV 'floating divide' {{{
 runFDIV :: RunInsn
 runFDIV mmix insn = do
+  rdm <- toRoundModeRaw <$> mmixGetSR mmix rAIx
+  (y,z) <- mmixGetGRFYZ mmix insn
+  let re = fpDivide rdm y z
+  mapM (issueTrip mmix) $ arithGetEx re
+  mmixSetGRFX mmix insn $ arithGetRx re
+  incPC mmix
 -- }}}
 
 -- FSQRT {{{

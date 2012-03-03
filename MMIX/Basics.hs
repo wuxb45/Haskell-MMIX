@@ -110,6 +110,7 @@ module MMIX.Basics (
 -- MMIX helpers {{{
   mmixGetGRS, mmixSetGRS,
   mmixGetGRF, mmixSetGRF,
+  mmixGetSRF, mmixSetSRF,
   mmixSetGRX, mmixSetGRSX, mmixSetGRFX,
   mmixGetGRX, mmixGetGRSX, mmixGetGRFX,
   mmixGetGRY, mmixGetGRSY, mmixGetGRFY,
@@ -133,13 +134,20 @@ module MMIX.Basics (
 -- arithmetic basis {{{
   ArithEx (..), cvAEtoT, cvAEtoBit,
   Hexadeca (..),
+  fromOrdering, fromBool,
 -- }}}
 -- floating-point {{{
   fpBsign, fpFsign, fpFe, fpFf, fpFse, fpBnan, fpFpl,
+  sfpBsign, sfpFsign, sfpFe, sfpFf, sfpFse, sfpBnan, sfpFpl,
+
   RoundMode (..), toRoundMode,
+
   FSign (..), toFSign, toFSignRaw, fpSetFSignRaw,
-  sfpSetFSignRaw, mdFSign,
-  NaNType (..), fpToNaN, fpToNaNRaw, sfpToNaNRaw, fpSetNaNRaw, fpSetNaNPayload,
+  sfpSetFSignRaw, flipFSign, mdFSign,
+
+  NaNType (..), fpToNaN, fpToNaNRaw, sfpToNaNRaw,
+  fpSetNaNRaw, fpSetNaNPayload, fpSetNaNPayloadRaw, sfpSetNaNPayloadRaw,
+
   FPInfo (..),
   fpUnpack, fpPack, sfpUnpack, sfpPack,
 
@@ -154,11 +162,20 @@ module MMIX.Basics (
   fpIsNormal, fpIsSubNormal,
 
   fpSNaN, fpQNaN, fpPInf, fpNInf, fpPZero, fpNZero,
+  sfpSNaN, sfpQNaN, sfpPInf, sfpNInf, sfpPZero, sfpNZero,
+
   fpUnordered,
+  fpUnorderedEps,
   fpAdd, fpiAdd,
   fpSub, fpiSub,
+  fpMult, fpiMult,
+  fpDivide, fpiDivide,
+  fpRem, fpiRem,
   fpCompare, fpiCompare,
   fpEqual, fpiEqual,
+  fpCompareEps, fpiCompareEps,
+  fpEqualEps, fpiEqualEps,
+  fpInt, fpiInt,
   fpFix, fpiFix, fpFixu, fpiFixu,
   fpFloat, fpFloatu, fpSFloat, fpSFloatu,
 -- }}}
@@ -1534,10 +1551,18 @@ mmixSetGRS mmix ix v = mmixSetGR mmix ix $ castOStoO v
 
 -- GR operation for FP {{{
 mmixGetGRF :: MMIX -> GRIx -> IO FP
-mmixGetGRF mmix ix = castOtoF `fmap` mmixGetGR mmix ix
+mmixGetGRF mmix ix = castOtoF <$> mmixGetGR mmix ix
 
 mmixSetGRF :: MMIX -> GRIx -> FP -> IO ()
 mmixSetGRF mmix ix v = mmixSetGR mmix ix $ castFtoO v
+-- }}}
+
+-- SR operation for FP {{{
+mmixGetSRF :: MMIX -> SRIx -> IO FP
+mmixGetSRF mmix ix = castOtoF <$> mmixGetSR mmix ix
+
+mmixSetSRF :: MMIX -> SRIx -> FP -> IO ()
+mmixSetSRF mmix ix v = mmixSetSR mmix ix $ castFtoO v
 -- }}}
 
 -- set $X by insn {{{
@@ -1823,21 +1848,30 @@ data ArithRx a = ArithRx
   , arithGetRx :: a
   }
 
+-- instance: Show {{{
 instance (Show a) => Show (ArithRx a) where
   show (ArithRx [] rx) = show rx
   show (ArithRx ex rx) = show rx ++ "{" ++ show ex ++ "}"
+-- }}}
 
+-- instance: Functor {{{
 instance Functor ArithRx where
   fmap f (ArithRx exa va) = ArithRx exa $ f va
+-- }}}
 
+-- instance: Applicative {{{
 instance Applicative ArithRx where
   pure a = ArithRx [] a
   ArithRx exf f <*> ArithRx ex v = ArithRx (ex ++ exf) $ f v
+-- }}}
 
+-- instance: Monad {{{
 instance Monad ArithRx where
   return a = ArithRx [] a
   ArithRx exa va >>= f = ArithRx (exa ++ exb) vb
     where (ArithRx exb vb) = f va
+-- }}}
+
 -- }}}
 
 -- cvAEtoT: convert arith-ex. to trip-type {{{
@@ -1859,12 +1893,16 @@ cvAEtoBit = tripAEBit . cvAEtoT
 
 -- Hexadeca: 128-bit number for mul/div {{{
 
+-- HD (high-64 bits) (low-64 bits)
 data Hexadeca = HD Octa Octa deriving (Eq, Ord)
 
+-- instance: Bounded {{{
 instance Bounded Hexadeca where
   minBound = HD 0 0
   maxBound = HD (-1) (-1)
+-- }}}
 
+-- instance: Enum {{{
 instance Enum Hexadeca where
   succ (HD (-1) (-1)) = error "Hexadeca.succ maxBound: bad argument"
   succ hd = hd + (HD 0 1)
@@ -1880,7 +1918,9 @@ instance Enum Hexadeca where
     if h == 0 && l `shiftR` 63 == 0
     then cast l
     else error "Hexadeca.fromEnum: bad argument"
+-- }}}
 
+-- instance: Num ((+), (-), (*), abs, fromInteger) {{{
 instance Num Hexadeca where
   (HD ah al) + (HD bh bl) = HD h l
     where
@@ -1894,8 +1934,8 @@ instance Num Hexadeca where
 
   a * b = fromInteger $ toInteger a * toInteger b
 
--- very slow mult {{{
--- XXX: keep this shit
+-- XXX: very slow mult {{{
+-- XXX: keep this shit (it works!)
 --          ######m7
 --        ######m6
 --      ######m5
@@ -1931,11 +1971,14 @@ instance Num Hexadeca where
   signum (HD 0 0) = 0
   signum _ = 1
   fromInteger i = HD (cast $ i `shiftR` 64) (cast i)
+-- }}}
 
+-- instance: Real {{{
 instance Real Hexadeca where
   toRational hd = toInteger hd % 1
+-- }}}
 
-
+-- instance: Bits {{{
 instance Bits Hexadeca where
   (HD ah al) .&. (HD bh bl) = HD (ah .&. bh) (al .&. bl)
   (HD ah al) .|. (HD bh bl) = HD (ah .|. bh) (al .|. bl)
@@ -1953,12 +1996,14 @@ instance Bits Hexadeca where
              | b < 0 = b0 + 128
   bitSize _ = 128
   isSigned _ = False
+-- }}}
 
+-- instance: Integral (quotRem) {{{
 instance Integral Hexadeca where
   quotRem a b = (fromInteger q, fromInteger r)
     where (q, r) = quotRem (toInteger a) (toInteger b)
 
--- very slow quot/rem (div) {{{
+-- XXX: very slow quot/rem (div) {{{
 -- XXX: keep this shit.
 {-
   quotRem a (HD 0 0) = error "Hexadeca.quotRem: bad argument"
@@ -1974,10 +2019,26 @@ instance Integral Hexadeca where
 -- }}}
 
   toInteger (HD h l) = ((toInteger h) `shiftL` 64) .|. (toInteger l)
+-- }}}
 
+-- instance: Show {{{
 instance Show Hexadeca where
   show hd = hx $ toInteger hd
+-- }}}
 
+-- }}}
+
+-- fromOrdering: Ordering -> Number {{{
+fromOrdering :: Ordering -> Octa
+fromOrdering LT = -1
+fromOrdering EQ = 0
+fromOrdering GT = 1
+-- }}}
+
+-- fromBool: Bool -> Number {{{
+fromBool :: Bool -> Octa
+fromBool True = 1
+fromBool False = 0
 -- }}}
 
 -- }}}
@@ -2043,14 +2104,17 @@ data RoundMode
   | RDown
   deriving (Eq, Show)
 
--- convert bits to RoundMode {{{
+-- get RoundMode from SR value {{{
+toRoundModeRaw :: Octa -> RoundMode
+toRoundModeRaw = toRoundMode . fldGet rAFRoundMode
+-- }}}
 
+-- convert bits to RoundMode {{{
 toRoundMode :: Octa -> RoundMode
 toRoundMode 0 = RNear
 toRoundMode 1 = RZero
 toRoundMode 2 = RUp
 toRoundMode 3 = RDown
-
 -- }}}
 
 -- }}}
@@ -2473,10 +2537,18 @@ fpRoundRaw RUp   s f = if s == FPositive then f + 3 else f
 
 -- }}}
 
--- fpUnorderd {{{
+-- fpUnordered {{{
 
 fpUnordered :: FP -> FP -> Bool
 fpUnordered a b = fpIsNaN a || fpIsNaN b
+
+-- }}}
+
+-- fpUnorderedEps {{{
+
+fpUnorderedEps :: FP -> FP -> FP -> Bool
+fpUnorderedEps e a b = 
+  (bitGet fpBsign (castFtoO e) == 1) || fpIsNaN e || fpIsNaN a || fpIsNaN b
 
 -- }}}
 
@@ -2615,41 +2687,165 @@ fpiMult r _ b@(NaN _ _ _) = fpPack r b
 
 -- }}}
 
+-- fpDivide {{{
+
+-- fpDivide {{{
+fpDivide :: RoundMode -> FP -> FP -> ArithRx FP
+fpDivide r a b = fpiDivide r (fpUnpack a) (fpUnpack b)
+-- }}}
+
+-- fpiDivide {{{
+fpiDivide :: RoundMode -> FPInfo -> FPInfo -> ArithRx FP
+-- x / y = z
+fpiDivide r (Number as ae af) (Number bs be bf) =
+  fpPack r (Number qs qe qf)
+  where
+    (q,rem) = HD af 0 `quotRem` HD 0 (bf `shiftL` 9)
+    qBig = fldGet (63, 55) q /= 0
+    qLow = if rem /= 0 || (qBig && bitGet 0 q == 1) then 1 else 0
+    qe = ae - be + 1021 + (if qBig then 1 else 0)
+    qf = cast $ qLow .|. (if qBig then q `shiftR` 1 else q)
+    qs = mdFSign as bs
+-- x / 0 = 0 exception Z
+fpiDivide r (Number as _ _) (Zero bs) =
+  ArithRx [AEZ] () >> fpPack r (Zero s)
+  where s = mdFSign as bs
+-- x / inf = 0
+fpiDivide r (Number as _ _) (Inf bs) = fpPack r (Zero s)
+  where s = mdFSign as bs
+-- 0 / x = 0
+fpiDivide r (Zero as) (Number bs _ _) = fpPack r (Zero s)
+  where s = mdFSign as bs
+-- 0 / Inf = 0
+fpiDivide r (Zero as) (Inf bs) = fpPack r (Zero s)
+  where s = mdFSign as bs
+-- 0 / 0 = NaN
+fpiDivide r (Zero as) (Zero bs) = fpPack r (NaN s SignalNaN 0)
+  where s = mdFSign as bs
+-- Inf / Inf = NaN
+fpiDivide r (Inf as) (Inf bs) = fpPack r (NaN s SignalNaN 0)
+  where s = mdFSign as bs
+-- Inf * not Zero -> Inf
+fpiDivide r (Inf as) (Number bs _ _) = fpPack r (Inf s)
+  where s = mdFSign as bs
+-- Inf * Zero -> Inf
+fpiDivide r (Inf as) (Zero bs) = fpPack r (Inf s)
+  where s = mdFSign as bs
+-- NaN -> NaN
+fpiDivide r a@(NaN _ _ _) b@(NaN _ _ _) =
+  fpPack r $ if fpiIsSNaN a then a else b
+fpiDivide r a@(NaN _ _ _) _ = fpPack r a
+fpiDivide r _ b@(NaN _ _ _) = fpPack r b
+-- }}}
+
+-- }}}
+
+-- fpRem {{{
+
+-- fpRem {{{
+fpRem :: RoundMode -> FP -> FP -> ArithRx FP
+fpRem r a b = fpiRem r (fpUnpack a) (fpUnpack b)
+-- }}}
+
+-- fpiRem {{{
+fpiRem :: RoundMode -> FPInfo -> FPInfo -> ArithRx FP
+-- }}}
+
+-- }}}
+
 -- fpCompare {{{
 
 -- fpCompare {{{
-fpCompare:: FP -> FP -> (Ordering, [ArithEx])
+fpCompare:: FP -> FP -> ArithRx Ordering
 fpCompare a b = fpiCompare (fpUnpack a) (fpUnpack b)
 -- }}}
 
 -- fpiCompare {{{
-fpiCompare :: FPInfo -> FPInfo -> (Ordering, [ArithEx])
+fpiCompare :: FPInfo -> FPInfo -> ArithRx Ordering
 -- normal numbers
 fpiCompare (Number as ae af) (Number bs be bf) =
   case compare as bs of
     EQ -> case compare ae be of
-            EQ -> (compare af bf, [])
-            eOrd -> (eOrd, [])
-    sOrd -> (sOrd, [])
+            EQ -> return $ compare af bf
+            eOrd -> return eOrd
+    sOrd -> return sOrd
 fpiCompare (Number as ae af) (Zero _) =
   case as of
-    FPositive -> (GT, [])
-    FNegative -> (LT, [])
+    FPositive -> return GT
+    FNegative -> return LT
 fpiCompare (Zero _) (Number bs be bf) =
   case bs of
-    FPositive -> (LT, [])
-    FNegative -> (GT, [])
-fpiCompare (Zero _) (Zero _) = (EQ, [])
+    FPositive -> return LT
+    FNegative -> return GT
+fpiCompare (Zero _) (Zero _) = return EQ
 -- use wildcard for NaN
-fpiCompare (NaN _ _ _) _ = (EQ, [AEI])
-fpiCompare _ (NaN _ _ _) = (EQ, [AEI])
+fpiCompare (NaN _ _ _) _ = ArithRx [AEI] EQ
+fpiCompare _ (NaN _ _ _) = ArithRx [AEI] EQ
 -- use wildcard for Inf
-fpiCompare (Inf FPositive) (Inf FPositive) = (EQ, [])
-fpiCompare (Inf FNegative) (Inf FNegative) = (EQ, [])
-fpiCompare (Inf FPositive) _ = (GT, [])
-fpiCompare (Inf FNegative) _ = (LT, [])
-fpiCompare _ (Inf FPositive) = (LT, [])
-fpiCompare _ (Inf FNegative) = (GT, [])
+fpiCompare (Inf FPositive) (Inf FPositive) = return EQ
+fpiCompare (Inf FNegative) (Inf FNegative) = return EQ
+fpiCompare (Inf FPositive) _ = return GT
+fpiCompare (Inf FNegative) _ = return LT
+fpiCompare _ (Inf FPositive) = return LT
+fpiCompare _ (Inf FNegative) = return GT
+-- }}}
+
+-- }}}
+
+-- fpCompareEps {{{
+
+-- fpCompareEps: eps -> a -> b -> >/</= (weak equal) {{{
+fpCompareEps :: FP -> FP -> FP -> ArithRx Ordering
+fpCompareEps e a b = fpiCompareEps (fpUnpack e) (fpUnpack a) (fpUnpack b)
+-- }}}
+
+-- fpiCompareEps {{{
+fpiCompareEps :: FPInfo -> FPInfo -> FPInfo -> ArithRx Ordering
+-- any NaN -> exception
+fpiCompareEps (NaN _ _ _) _ _ = ArithRx [AEI] EQ
+fpiCompareEps _ (NaN _ _ _) _ = ArithRx [AEI] EQ
+fpiCompareEps _ _ (NaN _ _ _) = ArithRx [AEI] EQ
+-- e < 0 -> exception
+fpiCompareEps (Number FNegative _ _) _ _ = ArithRx [AEI] EQ
+-- normal numbers
+fpiCompareEps (Number _ ee ef) a@(Number as ae af) b@(Number bs be bf) =
+  if fpWeakEqualEpsRaw (ee,ef) (as,ae,af) (bs,be,bf)
+  then return EQ else fpiCompare a b
+fpiCompareEps (Number _ ee ef) a@(Zero as) b@(Number bs be bf) =
+  if fpWeakEqualEpsRaw (ee, ef) (as, -1000, 0) (bs, be, bf)
+  then return EQ else fpiCompare a b
+fpiCompareEps (Number _ ee ef) a@(Number as ae af) b@(Zero bs) =
+  if fpWeakEqualEpsRaw (ee, ef) (as, ae, af) (bs, -1000, 0)
+  then return EQ else fpiCompare a b
+fpiCompareEps (Number _ _ _) (Zero _) (Zero _) = return EQ
+fpiCompareEps (Number _ ee _) a@(Inf as) b@(Inf bs) =
+  if as == bs || ee >= 1023 then return EQ else fpiCompare a b
+fpiCompareEps (Number _ ee _) a@(Inf _) b =
+  if ee >= 1022 then return EQ else fpiCompare a b
+fpiCompareEps (Number _ ee _) a b@(Inf _) =
+  if ee >= 1022 then return EQ else fpiCompare a b
+fpiCompareEps (Zero _) a b = fpiCompare a b
+fpiCompareEps (Inf _) _ _ = return EQ
+-- }}}
+
+-- fpWeakEqualEpsRaw {{{
+fpWeakEqualEpsRaw
+  :: (OctaS, Octa) -- eps
+  -> (FSign, OctaS, Octa)
+  -> (FSign, OctaS, Octa)
+  -> Bool
+fpWeakEqualEpsRaw e a@(_, ae, af) b@(_, be, bf) =
+  fpEqualEpsRaw e l r
+  where
+    (ar, br) = (e0 a, e0 b)
+    (l, r) =
+      if ae < be || (ae == be && af < bf)
+      then (br, ar)
+      else (ar, br)
+    e0 orig@(s, e, f) =
+      if e < 0
+      then (s, 0, f `shiftR` cast (-e))
+      else orig
 -- }}}
 
 -- }}}
@@ -2664,7 +2860,84 @@ fpEqual a b = fpiEqual (fpUnpack a) (fpUnpack b)
 -- fpiEqual {{{
 fpiEqual (NaN _ _ _) _ = False
 fpiEqual _ (NaN _ _ _) = False
-fpiEqual a b = fst (fpiCompare a b) == EQ
+fpiEqual a b = arithGetRx (fpiCompare a b) == EQ
+-- }}}
+
+-- }}}
+
+-- fpEqualEpsRaw {{{
+fpEqualEpsRaw
+  :: (OctaS, Octa) -- eps
+  -> (FSign, OctaS, Octa) -- larger
+  -> (FSign, OctaS, Octa) -- smaller
+  -> Bool
+fpEqualEpsRaw (ee,ef) (as,ae,af) (bs,be,bf)
+  | ee >= 1023 = True
+  | bl /= 0 && ee < 1020 = False
+  | bh'' == 0 = True
+  | ee < 968 = False
+  | otherwise = bh'' <= ef'
+  where
+    d = ae - be
+    (bh,bl)
+      | d > 54 = (0, bf)
+      | d > 0 = (fldGet (63, cast d) bf, fldGet (cast (d - 1), 0) bf)
+      | otherwise = (bf, 0)
+    bh' = if as /= bs && bl /= 0 then bh + 1 else bh
+    bh'' = if as == bs then af - bh' else af + bh'
+    ef' = if ee >= 1021
+      then ef `shiftL` cast (ee - 1021)
+      else ef `shiftR` cast (1021 - ee)
+-- }}}
+
+-- fpEqualEps {{{
+
+-- fpEqualEps {{{
+fpEqualEps :: FP -> FP -> FP -> ArithRx Bool
+fpEqualEps e a b = fpiEqualEps (fpUnpack e) (fpUnpack a) (fpUnpack b)
+-- }}}
+
+-- fpiEqualEps {{{
+fpiEqualEps :: FPInfo -> FPInfo -> FPInfo -> ArithRx Bool
+-- any NaN -> exception
+fpiEqualEps (NaN _ _ _) _ _ = ArithRx [AEI] False
+fpiEqualEps _ (NaN _ _ _) _ = ArithRx [AEI] False
+fpiEqualEps _ _ (NaN _ _ _) = ArithRx [AEI] False
+-- e < 0 -> exception
+fpiEqualEps (Number FNegative _ _) _ _ = ArithRx [AEI] False
+-- normal numbers
+fpiEqualEps (Number _ ee ef) (Number as ae af) (Number bs be bf) =
+  return $ fpStrongEqualEpsRaw (ee,ef) (as,ae,af) (bs,be,bf)
+fpiEqualEps (Number _ _ _) (Zero _) (Number _ _ _) = return False
+fpiEqualEps (Number _ _ _) (Number _ _ _) (Zero _) = return False
+fpiEqualEps (Number _ _ _) (Zero _) (Zero _) = return True
+fpiEqualEps (Number _ ee _) (Inf as) (Inf bs) =
+  return $ as == bs || ee >= 1023
+fpiEqualEps (Number _ _ _) (Inf _) _ = return False
+fpiEqualEps (Number _ _ _) _ (Inf _) = return False
+fpiEqualEps (Zero _) a b = return $ fpiEqual a b
+fpiEqualEps (Inf _) _ _ = return True
+-- }}}
+
+-- fpStrongEqualEpsRaw {{{
+fpStrongEqualEpsRaw 
+  :: (OctaS, Octa) -- eps
+  -> (FSign, OctaS, Octa)
+  -> (FSign, OctaS, Octa)
+  -> Bool
+fpStrongEqualEpsRaw e@(ee,ef) a@(_, ae, af) b@(_, be, bf) =
+  fpEqualEpsRaw e' l r
+  where
+    (ar, br) = (e0 a, e0 b)
+    (l@(_,le,_), r@(_,re,_)) =
+      if ae < be || (ae == be && af < bf)
+      then (br, ar)
+      else (ar, br)
+    e0 orig@(s, e, f) =
+      if e < 0
+      then (s, 0, f `shiftR` cast (-e))
+      else orig
+    e' = (ee - (le - re), ef)
 -- }}}
 
 -- }}}
