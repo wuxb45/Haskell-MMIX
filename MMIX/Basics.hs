@@ -140,7 +140,7 @@ module MMIX.Basics (
   fpBsign, fpFsign, fpFe, fpFf, fpFse, fpBnan, fpFpl,
   sfpBsign, sfpFsign, sfpFe, sfpFf, sfpFse, sfpBnan, sfpFpl,
 
-  RoundMode (..), toRoundMode,
+  RoundMode (..), toRoundMode, toRoundModeImm,
 
   FSign (..), toFSign, toFSignRaw, fpSetFSignRaw,
   sfpSetFSignRaw, flipFSign, mdFSign,
@@ -171,6 +171,7 @@ module MMIX.Basics (
   fpMult, fpiMult,
   fpDivide, fpiDivide,
   fpRem, fpiRem,
+  fpSqrt, fpiSqrt,
   fpCompare, fpiCompare,
   fpEqual, fpiEqual,
   fpCompareEps, fpiCompareEps,
@@ -192,7 +193,7 @@ import Prelude
          Double, Float,
          (.), ($), (+), (-), (*), (/), (||), (&&),
          (>=), (<=), (<), (>),
-         fromIntegral, otherwise, fst, id, error,
+         fromIntegral, otherwise, fst, id, error, undefined,
        )
 import Control.Applicative (Applicative (..), (<$>), (<*>))
 import Control.Monad (Monad (..), Functor (..), (>>=),
@@ -2117,6 +2118,15 @@ toRoundMode 2 = RUp
 toRoundMode 3 = RDown
 -- }}}
 
+-- convert immediate value to RoundMode {{{
+toRoundModeImm :: Octa -> Maybe RoundMode
+toRoundModeImm 1 = toRoundMode 1
+toRoundModeImm 2 = toRoundMode 2
+toRoundModeImm 3 = toRoundMode 3
+toRoundModeImm 4 = toRoundMode 0
+toRoundModeImm _ = Nothing
+-- }}}
+
 -- }}}
 
 -- Sign {{{
@@ -2516,6 +2526,13 @@ sfpNZero = castTtoSF 0x80000000
 
 -- }}}
 
+-- fpiAlign {{{
+fpiAlign :: FPInfo -> FPInfo
+fpiAlign (Number s e f) = Number s e' f'
+  where (e',f') = fpAlignRaw (e,f)
+fpiAlign x = x
+-- }}}
+
 -- fpAlignRaw {{{
 fpAlignRaw :: (OctaS, Octa) -> (OctaS, Octa)
 fpAlignRaw (e, f)
@@ -2743,12 +2760,88 @@ fpiDivide r _ b@(NaN _ _ _) = fpPack r b
 -- fpRem {{{
 
 -- fpRem {{{
-fpRem :: RoundMode -> FP -> FP -> ArithRx FP
-fpRem r a b = fpiRem r (fpUnpack a) (fpUnpack b)
+fpRem :: FP -> FP -> ArithRx FP
+fpRem a b = fpiRem (fpUnpack a) (fpUnpack b)
 -- }}}
 
 -- fpiRem {{{
-fpiRem :: RoundMode -> FPInfo -> FPInfo -> ArithRx FP
+fpiRem :: FPInfo -> FPInfo -> ArithRx FP
+-- number % number
+fpiRem a@(Number as ae af) b@(Number bs be bf) =
+  fpRemRaw as (ae, af) (be, bf) False
+-- zero % x, num % inf -> orig a
+fpiRem a@(Zero _) (Number _ _ _) = fpPack RZero a
+fpiRem a@(Zero _) (Inf _) = fpPack RZero a
+fpiRem a@(Number _ _ _) (Inf _) = fpPack RZero a
+-- NaN -> NaN
+fpiRem a@(NaN _ _ _) b@(NaN _ _ _) =
+  fpPack RZero $ if fpiIsSNaN a then a else b
+fpiRem a@(NaN _ _ _) _ = fpPack RZero a
+fpiRem _ b@(NaN _ _ _) = fpPack RZero b
+-- others: signal nan
+fpiRem (Inf s) _ = fpPack RZero $ NaN s SignalNaN 0
+fpiRem (Zero s) _ = fpPack RZero $ NaN s SignalNaN 0
+fpiRem (Number s _ _) _ = fpPack RZero $ NaN s SignalNaN 0
+-- }}}
+
+-- fpRemRaw {{{
+fpRemRaw :: FSign -> (OctaS, Octa) -> (OctaS, Octa) -> Bool -> ArithRx FP
+fpRemRaw s a@(ae, af) b@(be, bf) odd
+  | (ae >= be && af == bf) = fpPack RZero $ Zero s
+  | (ae >= be && af < bf && ae == be) = fpPack RZero $ slctMin af
+  | (ae >= be) = fpRemRaw s (fpAlignRaw a') b odd'
+  | (ae < be - 1) = fpPack RZero $ fpiAlign $ Number s ae af
+  | otherwise = fpPack RZero $ slctMin (af `shiftR` 1)
+  where
+    a' = if af < bf then (ae - 1, af + af - bf) else (ae, af - bf)
+    odd' = odd || (if af < bf then ae - 1 == be else ae == be)
+    slctMin f = fpiAlign $
+      if cf > f || (cf == f && odd == False)
+      then Number s be f
+      else Number (flipFSign s) be cf
+      where cf = bf - f
+-- }}}
+
+-- }}}
+
+-- fpSqrt {{{
+
+-- fpSqrt {{{
+fpSqrt :: RoundMode -> FP -> ArithRx FP
+fpSqrt r a = fpiSqrt r (fpUnpack a)
+-- }}}
+
+-- fpiSqrt {{{
+fpiSqrt :: RoundMode -> FPInfo -> ArithRx FP
+-- Number: + ok, - NaN
+fpiSqrt r (Number FNegative _ _) =
+  fpPack RNear $ NaN FNegative SignalNaN 0
+fpiSqrt r (Number s e f) = fpPack r $ Number s xe xf'
+  where
+    (xe, xf) = ((e + 1022) `shiftR` 1, 2)
+    f0 = if bitGet 0 e == 1 then f `shiftL` 1 else f
+    rf = (fldGet (63,54) f0) - 1
+    xf' = iter (53, rf, xf)
+    iter (0,r,x) = if r /= 0 then x + 1 else x
+    iter (k,r,x) = iter (k - 1, r''', x'')
+      where
+        (r',x') = (r `shiftL` 2, x `shiftL` 1)
+        k2 = k `shiftL` 1
+        fld | k >= 27 = (k2 - 53, k2 - 54)
+            | otherwise = undefined
+        r'' = if k >= 27 then r' + (fldGet fld f0) else r'
+        (r''', x'') =
+          if r'' > x'
+          then (r'' - x' - 1, x' + 2)
+          else (r'',x')
+-- Zero -> orig
+fpiSqrt r a@(Zero _) = fpPack r a
+-- -NaN -> Signal NaN
+fpiSqrt r (NaN FNegative _ _) = fpPack r $ NaN FNegative SignalNaN 0
+-- -Inf -> Signal NaN
+fpiSqrt r (Inf FNegative) = fpPack r $ NaN FNegative SignalNaN 0
+-- +NaN/+Inf, pack it back
+fpiSqrt r a = fpPack r a
 -- }}}
 
 -- }}}
@@ -2942,7 +3035,7 @@ fpStrongEqualEpsRaw e@(ee,ef) a@(_, ae, af) b@(_, be, bf) =
 
 -- }}}
 
--- fpInt: round to Integer value {{{
+-- fpInt: FP -> Octa {{{
 
 -- fpInt {{{
 fpInt :: RoundMode -> FP -> ArithRx FP
