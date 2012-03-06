@@ -14,6 +14,8 @@
 module MMIX.Basics (
 -- common helpers {{{
   cast, hx,
+  mapT2, mapT4, mapT8,
+  zipT2, zipT4, zipT8,
 -- }}}
 -- machine types and fields {{{
   Octa, Tetra, Wyde, Byte,
@@ -28,6 +30,8 @@ module MMIX.Basics (
   cvto, cvwt, cvbw, cvwo, cvbt, cvbo,
   xob, xow, xot, xtb, xtw, xwb,
   mob, mow, mot, mtb, mtw, mwb,
+  mapot, mapow, mapob, maptw, maptb, mapwb,
+  zipot, zipow, zipob, ziptw, ziptb, zipwb,
 -- }}}
 -- general bits convertion {{{
   bitMask, bitUMask, bitGet, bitSet,
@@ -144,11 +148,14 @@ module MMIX.Basics (
   intAdd, intAddu, int2Addu, int4Addu, int8Addu, int16Addu,
   intSub, intSubu,
   intCompare, intCompareu,
-
-  bitSL, bitSLu, bitSR, bitSRu,
-
   testN, testZ, testP, testODD,
   testNN, testNZ, testNP, testEVEN,
+-- }}}
+-- logic arithmetic {{{
+  (.|.), (.&.), complement, xor,
+  bitSL, bitSLu, bitSR, bitSRu,
+  diffByte, diffWyde, diffTetra, diffOcta,
+  bitMux, bitSAdd, bitTrans, bitMultiple, bitMOr, bitMXor,
 -- }}}
 -- floating-point {{{
   fpBsign, fpFsign, fpFe, fpFf, fpFse, fpBnan, fpFpl,
@@ -217,9 +224,9 @@ import Data.Array.IO (IOUArray)
 import Data.Array.MArray (MArray, newArray, getElems,
                           readArray, writeArray)
 import Data.Bits (Bits (..), bit, shift, shiftR, shiftL,
-                  (.&.), (.|.), complement)
+                  (.&.), (.|.), complement, popCount)
 import Data.Eq (Eq (..))
-import Data.List (filter, map, head, zip, (++), nub)
+import Data.List (filter, map, head, zip, (++), nub, foldl1')
 import Data.Int (Int, Int64, Int32, Int16, Int8)
 import Data.Maybe (catMaybes, fromMaybe)
 import qualified Data.Map as Map (Map, fromList, (!))
@@ -243,6 +250,49 @@ cast = fromIntegral
 -- hx, show in Hex format
 hx :: (Integral a, Show a) => a -> String
 hx v = showHex v ""
+
+-- map on tuple {{{
+mapT2 :: (a -> b)
+      -> (a, a)
+      -> (b, b)
+mapT2 f (a1, a2) = (f a1, f a2)
+
+mapT4 :: (a -> b)
+      -> (a, a, a, a)
+      -> (b, b, b, b)
+mapT4 f (a1, a2, a3, a4) = (f a1, f a2, f a3, f a4)
+
+mapT8 :: (a -> b)
+      -> (a, a, a, a, a, a, a, a)
+      -> (b, b, b, b, b, b, b, b)
+mapT8 f (a1, a2, a3, a4, a5, a6, a7, a8) =
+  (f a1, f a2, f a3, f a4, f a5, f a6, f a7, f a8)
+-- }}}
+
+-- zip on tuple {{{
+zipT2 :: (a -> b -> c)
+      -> (a, a)
+      -> (b, b)
+      -> (c, c)
+zipT2 f (a1, a2) (b1, b2) = (f a1 b1, f a2 b2)
+
+zipT4 :: (a -> b -> c)
+      -> (a, a, a, a)
+      -> (b, b, b, b)
+      -> (c, c, c, c)
+zipT4 f (a1, a2, a3, a4) (b1, b2, b3, b4) =
+  (f a1 b1, f a2 b2, f a3 b3, f a4 b4)
+
+zipT8 :: (a -> b -> c)
+      -> (a, a, a, a, a, a, a, a)
+      -> (b, b, b, b, b, b, b, b)
+      -> (c, c, c, c, c, c, c, c)
+zipT8 f (a1, a2, a3, a4, a5, a6, a7, a8)
+        (b1, b2, b3, b4, b5, b6, b7, b8) =
+  (f a1 b1, f a2 b2, f a3 b3, f a4 b4,
+   f a5 b5, f a6 b6, f a7 b7, f a8 b8)
+  
+-- }}}
 
 -- }}}
 
@@ -426,6 +476,47 @@ mwb addr w b = (w .&. mask) .|. ((cast b) `shiftL` sh)
         sh = (1 - cast (addr .&. 0x1)) `shiftL` 3 :: Int
 
 -- modify }}}
+
+-- map on byte fields {{{
+mapot :: (Tetra -> Tetra) -> Octa -> Octa
+mapot f o = cvto . mapT2 f . cvot $ o
+
+mapow :: (Wyde -> Wyde) -> Octa -> Octa
+mapow f o = cvwo . mapT4 f . cvow $ o
+
+mapob :: (Byte -> Byte) -> Octa -> Octa
+mapob f o = cvbo . mapT8 f . cvob $ o
+
+maptw :: (Wyde -> Wyde) -> Tetra -> Tetra
+maptw f t = cvwt . mapT2 f . cvtw $ t
+
+maptb :: (Byte -> Byte) -> Tetra -> Tetra
+maptb f t = cvbt . mapT4 f . cvtb $ t
+
+mapwb :: (Byte -> Byte) -> Wyde -> Wyde
+mapwb f w = cvbw . mapT2 f . cvwb $ w
+-- }}}
+
+-- zip on byte fields {{{
+zipot :: (Tetra -> Tetra -> Tetra) -> Octa -> Octa -> Octa
+zipot f a b = cvto $ zipT2 f (cvot a) (cvot b)
+
+zipow :: (Wyde -> Wyde -> Wyde) -> Octa -> Octa -> Octa
+zipow f a b = cvwo $ zipT4 f (cvow a) (cvow b)
+
+zipob :: (Byte -> Byte -> Byte) -> Octa -> Octa -> Octa
+zipob f a b = cvbo $ zipT8 f (cvob a) (cvob b)
+
+ziptw :: (Wyde -> Wyde -> Wyde) -> Tetra -> Tetra -> Tetra
+ziptw f a b = cvwt $ zipT2 f (cvtw a) (cvtw b)
+
+ziptb :: (Byte -> Byte -> Byte) -> Tetra -> Tetra -> Tetra
+ziptb f a b = cvbt $ zipT4 f (cvtb a) (cvtb b)
+
+zipwb :: (Byte -> Byte -> Byte) -> Wyde -> Wyde -> Wyde
+zipwb f a b = cvbw $ zipT2 f (cvwb a) (cvwb b)
+
+-- }}}
 
 -- }}}
 
@@ -2177,41 +2268,6 @@ intCompareu :: Octa -> Octa -> ArithRx Ordering
 intCompareu a b = return $ compare a b
 -- }}}
 
--- bit fiddling {{{
-
--- bitSL: shift left signed with exception {{{
-bitSL :: Octa -> Octa -> ArithRx Octa
-bitSL a s = ArithRx ex re
-  where
-    is = if s > 64 then 64 else cast s
-    ex = if ((castOtoOS re) `shiftR` is) /= (castOtoOS a)
-         then [AEV] else []
-    re = a `shiftL` is
--- }}}
-
--- bitSLu: shift left unsigned {{{
-bitSLu :: Octa -> Octa -> ArithRx Octa
-bitSLu a s = return $ a `shiftL` is
-  where
-    is = if s > 64 then 64 else cast s
--- }}}
-
--- bitSR: shift right signed no exception {{{
-bitSR :: Octa -> Octa -> ArithRx Octa
-bitSR a s = return $ castOStoO $ (castOtoOS a) `shiftR` is
-  where
-    is = if s > 64 then 64 else cast s
--- }}}
-
--- bitSRu: shift right unsigned {{{
-bitSRu :: Octa -> Octa -> ArithRx Octa
-bitSRu a s = return $ a `shiftR` is
-  where
-    is = if s > 64 then 64 else cast s
--- }}}
-
--- }}}
-
 -- test (N/Z/P/OD/NN/NZ/NP/EV) {{{
 
 -- testN (Negative)
@@ -2250,6 +2306,150 @@ testEVEN a = bitGet 0 a == 0
 
 -- }}}
 
+-- logic arithmetic {{{
+
+-- just use (.&.), (.|.), xor, complement
+
+-- shift {{{
+
+-- bitSL: shift left signed with exception {{{
+bitSL :: Octa -> Octa -> ArithRx Octa
+bitSL a s = ArithRx ex re
+  where
+    is = if s > 64 then 64 else cast s
+    ex = if ((castOtoOS re) `shiftR` is) /= (castOtoOS a)
+         then [AEV] else []
+    re = a `shiftL` is
+-- }}}
+
+-- bitSLu: shift left unsigned {{{
+bitSLu :: Octa -> Octa -> ArithRx Octa
+bitSLu a s = return $ a `shiftL` is
+  where
+    is = if s > 64 then 64 else cast s
+-- }}}
+
+-- bitSR: shift right signed no exception {{{
+bitSR :: Octa -> Octa -> ArithRx Octa
+bitSR a s = return $ castOStoO $ (castOtoOS a) `shiftR` is
+  where
+    is = if s > 64 then 64 else cast s
+-- }}}
+
+-- bitSRu: shift right unsigned {{{
+bitSRu :: Octa -> Octa -> ArithRx Octa
+bitSRu a s = return $ a `shiftR` is
+  where
+    is = if s > 64 then 64 else cast s
+-- }}}
+
+-- }}}
+
+-- diff: y > z ? y - z : 0 {{{
+
+-- byte diff {{{
+diffByte :: Octa -> Octa -> Octa
+diffByte a b = zipob diff a b
+  where diff a b = if a > b then a - b else 0
+-- }}}
+
+-- wyde diff {{{
+diffWyde :: Octa -> Octa -> Octa
+diffWyde a b = zipow diff a b
+  where diff a b = if a > b then a - b else 0
+-- }}}
+
+-- tetra diff {{{
+diffTetra :: Octa -> Octa -> Octa
+diffTetra a b = zipot diff a b
+  where diff a b = if a > b then a - b else 0
+-- }}}
+
+-- octa diff {{{
+diffOcta :: Octa -> Octa -> Octa
+diffOcta a b = if a > b then a - b else 0
+-- }}}
+
+-- }}}
+
+-- mux: bitwise multiplex {{{
+bitMux :: Octa -> Octa -> Octa -> Octa
+bitMux m a b = (m .&. a) .|. (mc .&. b)
+  where mc = complement m
+-- }}}
+
+-- sadd: sideways add {{{
+bitSAdd :: Octa -> Octa -> Octa
+bitSAdd y z = cast $ popCount $ y .&. (complement z)
+-- }}}
+
+--------------------------------------------------------------------
+-- how to put 8 bits togather:
+--
+--  xxxxxxxxiiiiiiiixxxxxxxxiiiiiiiixxxxxxxxiiiiiiiixxxxxxxxiiiiiiii
+--  and with 0x0101010101010101 ->
+--  _______a_______b_______c_______d_______e_______f_______g_______h
+--  ********************************^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+--  shift high part down 28 ->
+--    ___a_______b_______c_______d____ (shift 28)
+--  | _______e_______f_______g_______h
+--  = ___a___e___b___f___c___g___d___h
+--    ********^^^^^^^^********^^^^^^^^
+--    ___a___e___b___f___c___g_ (shift 7)
+--  | ____b___f___c___g___d___h
+--  = ___ab__ef__xx__xx__cd__gh
+--    *********^^^^^^^^^^^^^^^^
+--    ___ab__ef__ (shift 14)
+--  | _xx__cd__gh
+--  = _xxabcdefgh
+--------------------------------------------------------------------
+
+-- bitTransposition {{{
+bitTrans :: Octa -> Octa
+bitTrans a = cvto (high, low)
+  where
+    high = cvbt $ mapT4 (cast . squeeze . skip8) (7,6,5,4)
+    low  = cvbt $ mapT4 (cast . squeeze . skip8) (3,2,1,0)
+    skip8 i = (a `shiftR` i) .&. 0x0101010101010101
+    squeeze v = v3 .&. 0xff
+      where
+        v1 = (v `shiftR` 28) .|. v
+        v2 = (v1 `shiftR` 7) .|. v1
+        v3 = (v2 `shiftR` 14) .|. v2
+-- }}}
+
+
+-- bitMultiple: do the dirty work (XXX: slow!!!) {{{
+bitMultiple :: (Octa -> Octa -> Octa) -> Octa -> Octa -> Octa
+bitMultiple f a b = bitTrans $ foldl1' (.|.) $ map row [0..7]
+  where
+    yT = bitTrans a
+    row i = f8 i $ yT .&. (dup8 i b)
+    dup8 i v = d8
+      where
+        d1 = xob i v
+        d2 = cvbw (d1, d1)
+        d4 = cvwt (d2, d2)
+        d8 = cvto (d4, d4)
+    f8 ix v8 = v `shiftR` (cast ix)
+      where
+        v4 = f v8 $ shiftL (v8 .&. 0x0f0f0f0f0f0f0f0f) 4
+        v2 = f v4 $ shiftL (v4 .&. 0x3030303030303030) 2
+        v1 = f v2 $ shiftL (v2 .&. 0x4040404040404040) 1
+        v = v1 .&. 0x8080808080808080
+-- }}}
+
+-- mor: multiple or  {{{
+bitMOr :: Octa -> Octa -> Octa
+bitMOr = bitMultiple (.|.)
+-- }}}
+
+-- mxor: multiple xor
+bitMXor :: Octa -> Octa -> Octa
+bitMXor = bitMultiple xor
+-- }}}
+
+-- }}}
 
 -- floating-point {{{
 

@@ -467,6 +467,7 @@ incPC mmix = do
 
 type RunInsn = MMIX -> Insn -> IO ()
 
+-- done
 -- 0* trap, floating +-/convert {{{
 
 -- TRAP 'trap' {{{
@@ -658,6 +659,7 @@ runSFLOTUI mmix insn = do
 
 -- }}}
 
+-- done
 -- 1* floating, integer mul/div {{{
 
 -- FMUL 'floating multiply' {{{
@@ -851,6 +853,7 @@ runDIVUI mmix insn = do
 
 -- }}}
 
+-- done
 -- 2* integer add/sub {{{
 
 -- ADD {{{
@@ -1023,6 +1026,7 @@ runXVIADDUI mmix insn = do
 
 -- }}}
 
+-- done
 -- 3* integer compare/neg/shift {{{
 
 -- CMP {{{
@@ -1367,6 +1371,7 @@ runPBEVB mmix insn = do
 
 -- }}}
 
+-- done
 -- 6* conditional set {{{
 
 -- CSN {{{
@@ -1507,6 +1512,7 @@ runCSEVI mmix insn = do
 
 -- }}}
 
+-- done
 -- 7* zero or set {{{
 
 -- ZSN {{{
@@ -1983,174 +1989,291 @@ runPUSHGOI mmix insn = do
 
 -- }}}
 
--- c* bits {{{
+-- done
+-- c* bit logic (and/or/xor/nor) {{{
 
 -- OR {{{
 runOR :: RunInsn
 runOR mmix insn = do
+  (y,z) <- mmixGetGRYZ mmix insn
+  mmixSetGRX mmix insn $ y .|. z
+  incPC mmix
 -- }}}
 
 -- ORI {{{
 runORI :: RunInsn
 runORI mmix insn = do
+  y <- mmixGetGRY mmix insn
+  let z = iGetZu insn
+  mmixSetGRX mmix insn $ y .|. z
+  incPC mmix
 -- }}}
 
 -- ORN {{{
 runORN :: RunInsn
 runORN mmix insn = do
+  (y,z) <- mmixGetGRYZ mmix insn
+  mmixSetGRX mmix insn $ y .|. (complement z)
+  incPC mmix
 -- }}}
 
 -- ORNI {{{
 runORNI :: RunInsn
 runORNI mmix insn = do
+  y <- mmixGetGRY mmix insn
+  let z = iGetZu insn
+  mmixSetGRX mmix insn $ y .|. (complement z)
+  incPC mmix
 -- }}}
 
 -- NOR {{{
 runNOR :: RunInsn
 runNOR mmix insn = do
+  (y,z) <- mmixGetGRYZ mmix insn
+  mmixSetGRX mmix insn $ complement $ y .|. z
+  incPC mmix
 -- }}}
 
 -- NORI {{{
 runNORI :: RunInsn
 runNORI mmix insn = do
+  y <- mmixGetGRY mmix insn
+  let z = iGetZu insn
+  mmixSetGRX mmix insn $ complement $ y .|. z
+  incPC mmix
 -- }}}
 
 -- XOR {{{
 runXOR :: RunInsn
 runXOR mmix insn = do
+  (y,z) <- mmixGetGRYZ mmix insn
+  mmixSetGRX mmix insn $ y `xor` z
+  incPC mmix
 -- }}}
 
 -- XORI {{{
 runXORI :: RunInsn
 runXORI mmix insn = do
+  y <- mmixGetGRY mmix insn
+  let z = iGetZu insn
+  mmixSetGRX mmix insn $ y `xor` z
+  incPC mmix
 -- }}}
 
 -- AND {{{
 runAND :: RunInsn
 runAND mmix insn = do
+  (y,z) <- mmixGetGRYZ mmix insn
+  mmixSetGRX mmix insn $ y .&. z
+  incPC mmix
 -- }}}
 
 -- ANDI {{{
 runANDI :: RunInsn
 runANDI mmix insn = do
+  y <- mmixGetGRY mmix insn
+  let z = iGetZu insn
+  mmixSetGRX mmix insn $ y .&. z
+  incPC mmix
 -- }}}
 
 -- ANDN {{{
 runANDN :: RunInsn
 runANDN mmix insn = do
+  (y,z) <- mmixGetGRYZ mmix insn
+  mmixSetGRX mmix insn $ y .&. (complement z)
+  incPC mmix
 -- }}}
 
 -- ANDNI {{{
 runANDNI :: RunInsn
 runANDNI mmix insn = do
+  y <- mmixGetGRY mmix insn
+  let z = iGetZu insn
+  mmixSetGRX mmix insn $ y .&. (complement z)
+  incPC mmix
 -- }}}
 
 -- NAND {{{
 runNAND :: RunInsn
 runNAND mmix insn = do
+  (y,z) <- mmixGetGRYZ mmix insn
+  mmixSetGRX mmix insn $ complement $ y .&. z
+  incPC mmix
 -- }}}
 
 -- NANDI {{{
 runNANDI :: RunInsn
 runNANDI mmix insn = do
+  y <- mmixGetGRY mmix insn
+  let z = iGetZu insn
+  mmixSetGRX mmix insn $ complement $ y .&. z
+  incPC mmix
 -- }}}
 
 -- NXOR {{{
 runNXOR :: RunInsn
 runNXOR mmix insn = do
+  (y,z) <- mmixGetGRYZ mmix insn
+  mmixSetGRX mmix insn $ complement $ y `xor` z
+  incPC mmix
 -- }}}
 
 -- NXORI {{{
 runNXORI :: RunInsn
 runNXORI mmix insn = do
+  y <- mmixGetGRY mmix insn
+  let z = iGetZu insn
+  mmixSetGRX mmix insn $ complement $ y `xor` z
+  incPC mmix
 -- }}}
 
 -- }}}
 
--- d* {{{
+-- done
+-- d* bytes magic {{{
 
--- BDIF {{{
+-- BDIF 'byte difference' {{{
 runBDIF :: RunInsn
 runBDIF mmix insn = do
+  (y,z) <- mmixGetGRYZ mmix insn
+  mmixSetGRX mmix insn $ diffByte y z
+  incPC mmix
 -- }}}
 
--- BDIFI {{{
+-- BDIFI 'byte difference immediate' {{{
 runBDIFI :: RunInsn
 runBDIFI mmix insn = do
+  y <- mmixGetGRY mmix insn
+  let z = iGetZu insn
+  mmixSetGRX mmix insn $ diffByte y z
+  incPC mmix
 -- }}}
 
--- WDIF {{{
+-- WDIF 'wyde difference' {{{
 runWDIF :: RunInsn
 runWDIF mmix insn = do
+  (y,z) <- mmixGetGRYZ mmix insn
+  mmixSetGRX mmix insn $ diffWyde y z
+  incPC mmix
 -- }}}
 
--- WDIFI {{{
+-- WDIFI 'wyde difference immediate' {{{
 runWDIFI :: RunInsn
 runWDIFI mmix insn = do
+  y <- mmixGetGRY mmix insn
+  let z = iGetZu insn
+  mmixSetGRX mmix insn $ diffWyde y z
+  incPC mmix
 -- }}}
 
--- TDIF {{{
+-- TDIF 'tetra difference' {{{
 runTDIF :: RunInsn
 runTDIF mmix insn = do
+  (y,z) <- mmixGetGRYZ mmix insn
+  mmixSetGRX mmix insn $ diffTetra y z
+  incPC mmix
 -- }}}
 
--- TDIFI {{{
+-- TDIFI 'tetra difference immediate' {{{
 runTDIFI :: RunInsn
 runTDIFI mmix insn = do
+  y <- mmixGetGRY mmix insn
+  let z = iGetZu insn
+  mmixSetGRX mmix insn $ diffTetra y z
+  incPC mmix
 -- }}}
 
--- ODIF {{{
+-- ODIF 'octa difference' {{{
 runODIF :: RunInsn
 runODIF mmix insn = do
+  (y,z) <- mmixGetGRYZ mmix insn
+  mmixSetGRX mmix insn $ diffOcta y z
+  incPC mmix
 -- }}}
 
--- ODIFI {{{
+-- ODIFI 'octa difference immediate' {{{
 runODIFI :: RunInsn
 runODIFI mmix insn = do
+  y <- mmixGetGRY mmix insn
+  let z = iGetZu insn
+  mmixSetGRX mmix insn $ diffOcta y z
+  incPC mmix
 -- }}}
 
--- MUX {{{
+-- MUX 'bitwise multiplex' {{{
 runMUX :: RunInsn
 runMUX mmix insn = do
+  (y,z) <- mmixGetGRYZ mmix insn
+  m <- mmixGetSR mmix rMIx
+  mmixSetGRX mmix insn $ bitMux m y z
+  incPC mmix
 -- }}}
 
--- MUXI {{{
+-- MUXI 'bitwise multiplex immediate' {{{
 runMUXI :: RunInsn
 runMUXI mmix insn = do
+  y <- mmixGetGRY mmix insn
+  let z = iGetZu insn
+  m <- mmixGetSR mmix rMIx
+  mmixSetGRX mmix insn $ bitMux m y z
+  incPC mmix
 -- }}}
 
--- SADD {{{
+-- SADD 'sideways add' {{{
 runSADD :: RunInsn
 runSADD mmix insn = do
+  (y,z) <- mmixGetGRYZ mmix insn
+  mmixSetGRX mmix insn $ bitSAdd y z
+  incPC mmix
 -- }}}
 
--- SADDI {{{
+-- SADDI 'sideways add immediate' {{{
 runSADDI :: RunInsn
 runSADDI mmix insn = do
+  y <- mmixGetGRY mmix insn
+  let z = iGetZu insn
+  mmixSetGRX mmix insn $ bitSAdd y z
+  incPC mmix
 -- }}}
 
--- MOR {{{
+-- MOR 'multiple or' {{{
 runMOR :: RunInsn
 runMOR mmix insn = do
+  (y,z) <- mmixGetGRYZ mmix insn
+  mmixSetGRX mmix insn $ bitMOr y z
+  incPC mmix
 -- }}}
 
--- MORI {{{
+-- MORI 'multiple or immediate' {{{
 runMORI :: RunInsn
 runMORI mmix insn = do
+  y <- mmixGetGRY mmix insn
+  let z = iGetZu insn
+  mmixSetGRX mmix insn $ bitMOr y z
+  incPC mmix
 -- }}}
 
--- MXOR {{{
+-- MXOR 'multiple exclusive-or' {{{
 runMXOR :: RunInsn
 runMXOR mmix insn = do
+  (y,z) <- mmixGetGRYZ mmix insn
+  mmixSetGRX mmix insn $ bitMXor y z
+  incPC mmix
 -- }}}
 
--- MXORI {{{
+-- MXORI 'multiple exclusive-or immediate' {{{
 runMXORI :: RunInsn
 runMXORI mmix insn = do
+  y <- mmixGetGRY mmix insn
+  let z = iGetZu insn
+  mmixSetGRX mmix insn $ bitMXor y z
+  incPC mmix
 -- }}}
 
 -- }}}
 
+-- TODO
 -- e* {{{
 
 -- SETH {{{
