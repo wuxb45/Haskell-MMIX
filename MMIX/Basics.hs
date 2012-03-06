@@ -34,6 +34,7 @@ module MMIX.Basics (
   bitGetRaw, bitSetRaw, bitSet1, bitSet0,
   fldMask, fldUMask, fldGet, fldSet,
   fldGetRaw, fldSetRaw, fldSet1, fldSet0,
+  signExt, signExtByte, signExtWyde, signExtTetra,
 -- }}}
 -- coerce type casting {{{
   castFtoO,  castOtoF,
@@ -136,6 +137,19 @@ module MMIX.Basics (
   Hexadeca (..),
   fromOrdering, fromBool,
 -- }}}
+-- integral arithmetic {{{
+  intSignBit,
+  intMul, intMulu,
+  intDivide, intDivideu,
+  intAdd, intAddu, int2Addu, int4Addu, int8Addu, int16Addu,
+  intSub, intSubu,
+  intCompare, intCompareu,
+
+  bitSL, bitSLu, bitSR, bitSRu,
+
+  testN, testZ, testP, testODD,
+  testNN, testNZ, testNP, testEVEN,
+-- }}}
 -- floating-point {{{
   fpBsign, fpFsign, fpFe, fpFf, fpFse, fpBnan, fpFpl,
   sfpBsign, sfpFsign, sfpFe, sfpFf, sfpFse, sfpBnan, sfpFpl,
@@ -146,7 +160,8 @@ module MMIX.Basics (
   sfpSetFSignRaw, flipFSign, mdFSign,
 
   NaNType (..), fpToNaN, fpToNaNRaw, sfpToNaNRaw,
-  fpSetNaNRaw, fpSetNaNPayload, fpSetNaNPayloadRaw, sfpSetNaNPayloadRaw,
+  fpSetNaNRaw, fpSetNaNPayload,
+  fpSetNaNPayloadRaw, sfpSetNaNPayloadRaw,
 
   FPInfo (..),
   fpUnpack, fpPack, sfpUnpack, sfpPack,
@@ -494,11 +509,12 @@ fldSet0 f v = v .&. (fldUMask f)
 
 -- sign extend {{{
 
+-- signExt: sign bit -> value -> extended
 signExt :: (Bits a) => BitIx -> a -> a
 signExt b v = case bitGet b v of
   0 -> v
-  1 -> fldSet (hiBit, max b hiBit) (-1) v
-  where hiBit = cast $ (bitSize v) - 1 :: BitIx
+  1 -> fldSet (hiBit, min b hiBit) (-1) v
+  where hiBit = cast $ (bitSize v) - 1
 
 signExtByte :: (Bits a) => a -> a
 signExtByte = signExt 7
@@ -1200,7 +1216,7 @@ iGetXYZu i = cast $ i .&. 0xffffff
 
 -- }}}
 
--- field field signed {{{
+-- get field signed {{{
 
 -- get X value sign-extended
 iGetXs :: Insn -> Octa
@@ -1828,10 +1844,20 @@ tripCheckOne rA = case tripCheck rA of
 
 -- }}}
 
--- arithmetic basis {{{
+-- common arithmetic {{{
 
 -- ArithEx: ARITHmetic EXception {{{
-data ArithEx = AED | AEV | AEW | AEI | AEO | AEU | AEZ | AEX deriving (Eq)
+data ArithEx
+  = AED -- integer devide check
+  | AEV -- integer overflow
+  | AEW -- float-to-fix overflow
+  | AEI -- invalid operation
+  | AEO -- floating overflow
+  | AEU -- floating underflow
+  | AEZ -- floating division by zero
+  | AEX -- floating inexact
+  deriving (Eq)
+
 instance Show ArithEx where
   show AED = "\"integer devide check\""
   show AEV = "\"integer overflow\""
@@ -1892,7 +1918,7 @@ cvAEtoBit :: ArithEx -> Octa
 cvAEtoBit = tripAEBit . cvAEtoT
 -- }}}
 
--- Hexadeca: 128-bit number for mul/div {{{
+-- Hexadeca: 128-bit unsigned integer {{{
 
 -- HD (high-64 bits) (low-64 bits)
 data Hexadeca = HD Octa Octa deriving (Eq, Ord)
@@ -2024,7 +2050,7 @@ instance Integral Hexadeca where
 
 -- instance: Show {{{
 instance Show Hexadeca where
-  show hd = hx $ toInteger hd
+  show hd = "0x" ++ (hx $ toInteger hd)
 -- }}}
 
 -- }}}
@@ -2043,6 +2069,187 @@ fromBool False = 0
 -- }}}
 
 -- }}}
+
+-- integral arithmetic {{{
+
+-- integer sign bit {{{
+
+intSignBit :: Octa -> Octa
+intSignBit a = bitGet 63 a
+
+-- }}}
+
+-- intMul: signed/overflow/64-bits result {{{
+intMul :: Octa -> Octa -> ArithRx Octa
+intMul a b = ArithRx ex l
+  where
+    aa = (signExt 63 $ HD 0 a)
+    bb = (signExt 63 $ HD 0 b)
+    r@(HD h l) = aa * bb
+    ss = fldGet (127,63) r -- 65 high bits should be same
+    ex = if ss == 0 || ss == HD 1 (-1) then [] else [AEV]
+-- }}}
+
+-- intMulu: unsigned/128-bits result {{{
+intMulu :: Octa -> Octa -> ArithRx Hexadeca
+intMulu a b = return $ (HD 0 a) * (HD 0 b)
+-- }}}
+
+-- intDivide: signed/overflow(one case)/(q,r) {{{
+intDivide :: Octa -> Octa -> ArithRx (Octa, Octa)
+intDivide a b = if b == 0
+  then ArithRx [AED] (0, a)
+  else ArithRx ex qr
+  where
+    (q,r) = (castOtoOS a) `quotRem` (castOtoOS b)
+    vCase = (0x8000000000000000, 0xffffffffffffffff)
+    overflow = (a, b) == vCase
+    ex = if overflow then [AEV] else []
+    qr = if overflow then (a, 0) else (castOStoO q, castOStoO r)
+-- }}}
+
+-- intDivideu: unsigned/no exception {{{
+intDivideu :: Hexadeca -> Octa -> ArithRx (Octa, Octa)
+intDivideu a@(HD ah al) b = return $
+  if ah >= b then (ah, al)
+  else (ql, rl)
+  where
+    (HD qh ql, HD rh rl) = quotRem a (HD 0 b)
+-- }}}
+
+-- intAdd: signed/overflow {{{
+intAdd :: Octa -> Octa -> ArithRx Octa
+intAdd a b = ArithRx ex sum
+  where
+    sum = a + b
+    ex = if intSignBit a == intSignBit b 
+         && intSignBit a /= intSignBit sum
+         then [AEV] else []
+-- }}}
+
+-- intAddu: unsigned {{{
+intAddu :: Octa -> Octa -> ArithRx Octa
+intAddu a b = return $ a + b
+-- }}}
+
+-- int2Addu: a * 2 + b {{{
+int2Addu :: Octa -> Octa -> ArithRx Octa
+int2Addu a b = return $ a + a + b
+-- }}}
+
+-- int4Addu: a * 2 + b {{{
+int4Addu :: Octa -> Octa -> ArithRx Octa
+int4Addu a b = return $ (a `shiftL` 2) + b
+-- }}}
+
+-- int8Addu: a * 2 + b {{{
+int8Addu :: Octa -> Octa -> ArithRx Octa
+int8Addu a b = return $ (a `shiftL` 3) + b
+-- }}}
+
+-- int16Addu: a * 2 + b {{{
+int16Addu :: Octa -> Octa -> ArithRx Octa
+int16Addu a b = return $ (a `shiftL` 4) + b
+-- }}}
+
+-- intSub {{{
+intSub :: Octa -> Octa -> ArithRx Octa
+intSub a b = ArithRx ex dif
+  where
+    dif = a - b
+    ex = if intSignBit a /= intSignBit b
+         && intSignBit a /= intSignBit dif
+         then [AEV] else []
+-- }}}
+
+-- intSubu {{{
+intSubu :: Octa -> Octa -> ArithRx Octa
+intSubu a b = return $ a - b
+-- }}}
+
+-- intCompare: signed compare {{{
+intCompare :: Octa -> Octa -> ArithRx Ordering
+intCompare a b = return $ compare (castOtoOS a) (castOtoOS b)
+-- }}}
+
+-- intCompareu: unsigned compare {{{
+intCompareu :: Octa -> Octa -> ArithRx Ordering
+intCompareu a b = return $ compare a b
+-- }}}
+
+-- bit fiddling {{{
+
+-- bitSL: shift left signed with exception {{{
+bitSL :: Octa -> Octa -> ArithRx Octa
+bitSL a s = ArithRx ex re
+  where
+    is = if s > 64 then 64 else cast s
+    ex = if ((castOtoOS re) `shiftR` is) /= (castOtoOS a)
+         then [AEV] else []
+    re = a `shiftL` is
+-- }}}
+
+-- bitSLu: shift left unsigned {{{
+bitSLu :: Octa -> Octa -> ArithRx Octa
+bitSLu a s = return $ a `shiftL` is
+  where
+    is = if s > 64 then 64 else cast s
+-- }}}
+
+-- bitSR: shift right signed no exception {{{
+bitSR :: Octa -> Octa -> ArithRx Octa
+bitSR a s = return $ castOStoO $ (castOtoOS a) `shiftR` is
+  where
+    is = if s > 64 then 64 else cast s
+-- }}}
+
+-- bitSRu: shift right unsigned {{{
+bitSRu :: Octa -> Octa -> ArithRx Octa
+bitSRu a s = return $ a `shiftR` is
+  where
+    is = if s > 64 then 64 else cast s
+-- }}}
+
+-- }}}
+
+-- test (N/Z/P/OD/NN/NZ/NP/EV) {{{
+
+-- testN (Negative)
+testN :: Octa -> Bool
+testN a = bitGet 63 a == 1
+
+-- testZ (Zero)
+testZ :: Octa -> Bool
+testZ a = a == 0
+
+-- testP (Positive)
+testP :: Octa -> Bool
+testP a = bitGet 63 a == 0 && a /= 0
+
+-- testODD (Odd:1,3,5..)
+testODD :: Octa -> Bool
+testODD a = bitGet 0 a == 1
+
+-- testNN (Non-Negative)
+testNN :: Octa -> Bool
+testNN a = bitGet 63 a == 0
+
+-- testNZ (Non-Zero)
+testNZ :: Octa -> Bool
+testNZ a = a /= 0
+
+-- testNP (Non-Positive)
+testNP :: Octa -> Bool
+testNP a = bitGet 63 a == 1 || a == 0
+
+-- testEVEN (Even:2,4,6..)
+testEVEN :: Octa -> Bool
+testEVEN a = bitGet 0 a == 0
+
+-- }}}
+
+-- }}}
+
 
 -- floating-point {{{
 
@@ -2120,10 +2327,10 @@ toRoundMode 3 = RDown
 
 -- convert immediate value to RoundMode {{{
 toRoundModeImm :: Octa -> Maybe RoundMode
-toRoundModeImm 1 = toRoundMode 1
-toRoundModeImm 2 = toRoundMode 2
-toRoundModeImm 3 = toRoundMode 3
-toRoundModeImm 4 = toRoundMode 0
+toRoundModeImm 1 = Just $ toRoundMode 1
+toRoundModeImm 2 = Just $ toRoundMode 2
+toRoundModeImm 3 = Just $ toRoundMode 3
+toRoundModeImm 4 = Just $ toRoundMode 0
 toRoundModeImm _ = Nothing
 -- }}}
 

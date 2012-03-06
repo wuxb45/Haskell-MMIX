@@ -152,7 +152,6 @@ octa y, z;
   u[3] = y.h >> 16, u[2] = y.h & 0xffff, u[1] = y.l >> 16, u[0] = y.l & 0xffff;
   v[3] = z.h >> 16, v[2] = z.h & 0xffff, v[1] = z.l >> 16, v[0] = z.l & 0xffff;
 
-  ;
   for (j = 0; j < 4; j++)
     w[j] = 0;
   for (j = 0; j < 4; j++)
@@ -169,7 +168,6 @@ octa y, z;
   aux.h = (w[7] << 16) + w[6], aux.l = (w[5] << 16) + w[4];
   acc.h = (w[3] << 16) + w[2], acc.l = (w[1] << 16) + w[0];
 
-  ;
   return acc;
 }
 
@@ -183,6 +181,7 @@ octa y, z;
     aux = ominus(aux, z);
   if (z.h & sign_bit)
     aux = ominus(aux, y);
+  // overflow: 
   overflow = (aux.h != aux.l || (aux.h ^ (aux.h >> 1) ^ (acc.h & sign_bit)));
   return acc;
 }

@@ -467,6 +467,8 @@ incPC mmix = do
 
 type RunInsn = MMIX -> Insn -> IO ()
 
+-- 0* trap, floating +-/convert {{{
+
 -- TRAP 'trap' {{{
 runTRAP :: RunInsn
 runTRAP mmix insn = do
@@ -654,6 +656,10 @@ runSFLOTUI mmix insn = do
   incPC mmix
 -- }}}
 
+-- }}}
+
+-- 1* floating, integer mul/div {{{
+
 -- FMUL 'floating multiply' {{{
 runFMUL :: RunInsn
 runFMUL mmix insn = do
@@ -670,7 +676,7 @@ runFCMPE :: RunInsn
 runFCMPE mmix insn = do
   (y,z) <- mmixGetGRFYZ mmix insn
   e <- mmixGetSRF mmix rEIx
-  let re = fpCompareEps e y z
+  let re = fromOrdering <$> fpCompareEps e y z
   mapM (issueTrip mmix) $ arithGetEx re
   mmixSetGRX mmix insn $ arithGetRx re
   incPC mmix
@@ -745,205 +751,454 @@ runFINT mmix insn = do
   incPC mmix
 -- }}}
 
--- MUL {{{
+-- MUL 'multiply' {{{
 runMUL :: RunInsn
 runMUL mmix insn = do
+  (y,z) <- mmixGetGRYZ mmix insn
+  let re = intMul y z
+  mapM (issueTrip mmix) $ arithGetEx re
+  mmixSetGRX mmix insn $ arithGetRx re
+  incPC mmix
 -- }}}
 
--- MULI {{{
+-- MULI 'multiply immediate' {{{
 runMULI :: RunInsn
 runMULI mmix insn = do
+  y <- mmixGetGRY mmix insn
+  let z = iGetZu insn
+  let re = intMul y z
+  mapM (issueTrip mmix) $ arithGetEx re
+  mmixSetGRX mmix insn $ arithGetRx re
+  incPC mmix
 -- }}}
 
--- MULU {{{
+-- MULU 'multiply unsigned' {{{
 runMULU :: RunInsn
 runMULU mmix insn = do
+  (y,z) <- mmixGetGRYZ mmix insn
+  let re = intMulu y z
+  --mapM (issueTrip mmix) $ arithGetEx re
+  let (HD h l) = arithGetRx re
+  mmixSetGRX mmix insn l
+  mmixSetSR mmix rHIx h
+  incPC mmix
 -- }}}
 
--- MULUI {{{
+-- MULUI 'multiply unsigned immediate' {{{
 runMULUI :: RunInsn
 runMULUI mmix insn = do
+  y <- mmixGetGRY mmix insn
+  let z = iGetZu insn
+  let re = intMulu y z
+  --mapM (issueTrip mmix) $ arithGetEx re
+  let (HD h l) = arithGetRx re
+  mmixSetGRX mmix insn l
+  mmixSetSR mmix rHIx h
+  incPC mmix
 -- }}}
 
--- DIV {{{
+-- DIV 'divide' {{{
 runDIV :: RunInsn
 runDIV mmix insn = do
+  (y,z) <- mmixGetGRYZ mmix insn
+  let re = intDivide y z
+  mapM (issueTrip mmix) $ arithGetEx re
+  let (q,r) = arithGetRx re
+  mmixSetGRX mmix insn q
+  mmixSetSR mmix rRIx r
+  incPC mmix
 -- }}}
 
--- DIVI {{{
+-- DIVI 'divide immediate' {{{
 runDIVI :: RunInsn
 runDIVI mmix insn = do
+  y <- mmixGetGRY mmix insn
+  let z = iGetZu insn
+  let re = intDivide y z
+  mapM (issueTrip mmix) $ arithGetEx re
+  let (q,r) = arithGetRx re
+  mmixSetGRX mmix insn q
+  mmixSetSR mmix rRIx r
+  incPC mmix
 -- }}}
 
--- DIVU {{{
+-- DIVU 'divide unsigned' {{{
 runDIVU :: RunInsn
 runDIVU mmix insn = do
+  (y,z) <- mmixGetGRYZ mmix insn
+  d <- mmixGetSR mmix rDIx
+  let re = intDivideu (HD d y) z
+  --mapM (issueTrip mmix) $ arithGetEx re
+  let (q,r) = arithGetRx re
+  mmixSetGRX mmix insn q
+  mmixSetSR mmix rRIx r
+  incPC mmix
 -- }}}
 
--- DIVUI {{{
+-- DIVUI 'divide unsigned immediate' {{{
 runDIVUI :: RunInsn
 runDIVUI mmix insn = do
+  y <- mmixGetGRY mmix insn
+  let z = iGetZu insn
+  d <- mmixGetSR mmix rDIx
+  let re = intDivideu (HD d y) z
+  --mapM (issueTrip mmix) $ arithGetEx re
+  let (q,r) = arithGetRx re
+  mmixSetGRX mmix insn q
+  mmixSetSR mmix rRIx r
+  incPC mmix
 -- }}}
+
+-- }}}
+
+-- 2* integer add/sub {{{
 
 -- ADD {{{
 runADD :: RunInsn
 runADD mmix insn = do
+  (y,z) <- mmixGetGRYZ mmix insn
+  let re = intAdd y z
+  mapM (issueTrip mmix) $ arithGetEx re
+  mmixSetGRX mmix insn $ arithGetRx re
+  incPC mmix
 -- }}}
 
 -- ADDI {{{
 runADDI :: RunInsn
 runADDI mmix insn = do
+  y <- mmixGetGRY mmix insn
+  let z = iGetZu insn
+  let re = intAdd y z
+  mapM (issueTrip mmix) $ arithGetEx re
+  mmixSetGRX mmix insn $ arithGetRx re
+  incPC mmix
 -- }}}
 
 -- ADDU {{{
 runADDU :: RunInsn
 runADDU mmix insn = do
+  (y,z) <- mmixGetGRYZ mmix insn
+  let re = intAddu y z
+  --mapM (issueTrip mmix) $ arithGetEx re
+  mmixSetGRX mmix insn $ arithGetRx re
+  incPC mmix
 -- }}}
 
 -- ADDUI {{{
 runADDUI :: RunInsn
 runADDUI mmix insn = do
+  y <- mmixGetGRY mmix insn
+  let z = iGetZu insn
+  let re = intAddu y z
+  --mapM (issueTrip mmix) $ arithGetEx re
+  mmixSetGRX mmix insn $ arithGetRx re
+  incPC mmix
 -- }}}
 
 -- SUB {{{
 runSUB :: RunInsn
 runSUB mmix insn = do
+  (y,z) <- mmixGetGRYZ mmix insn
+  let re = intSub y z
+  mapM (issueTrip mmix) $ arithGetEx re
+  mmixSetGRX mmix insn $ arithGetRx re
+  incPC mmix
 -- }}}
 
 -- SUBI {{{
 runSUBI :: RunInsn
 runSUBI mmix insn = do
+  y <- mmixGetGRY mmix insn
+  let z = iGetZu insn
+  let re = intSub y z
+  mapM (issueTrip mmix) $ arithGetEx re
+  mmixSetGRX mmix insn $ arithGetRx re
+  incPC mmix
 -- }}}
 
 -- SUBU {{{
 runSUBU :: RunInsn
 runSUBU mmix insn = do
+  (y,z) <- mmixGetGRYZ mmix insn
+  let re = intSubu y z
+  --mapM (issueTrip mmix) $ arithGetEx re
+  mmixSetGRX mmix insn $ arithGetRx re
+  incPC mmix
 -- }}}
 
 -- SUBUI {{{
 runSUBUI :: RunInsn
 runSUBUI mmix insn = do
+  y <- mmixGetGRY mmix insn
+  let z = iGetZu insn
+  let re = intSubu y z
+  --mapM (issueTrip mmix) $ arithGetEx re
+  mmixSetGRX mmix insn $ arithGetRx re
+  incPC mmix
 -- }}}
 
 -- IIADDU {{{
 runIIADDU :: RunInsn
 runIIADDU mmix insn = do
+  (y,z) <- mmixGetGRYZ mmix insn
+  let re = int2Addu y z
+  --mapM (issueTrip mmix) $ arithGetEx re
+  mmixSetGRX mmix insn $ arithGetRx re
+  incPC mmix
 -- }}}
 
 -- IIADDUI {{{
 runIIADDUI :: RunInsn
 runIIADDUI mmix insn = do
+  y <- mmixGetGRY mmix insn
+  let z = iGetZu insn
+  let re = int2Addu y z
+  --mapM (issueTrip mmix) $ arithGetEx re
+  mmixSetGRX mmix insn $ arithGetRx re
+  incPC mmix
 -- }}}
 
 -- IVADDU {{{
 runIVADDU :: RunInsn
 runIVADDU mmix insn = do
+  (y,z) <- mmixGetGRYZ mmix insn
+  let re = int4Addu y z
+  --mapM (issueTrip mmix) $ arithGetEx re
+  mmixSetGRX mmix insn $ arithGetRx re
+  incPC mmix
 -- }}}
 
 -- IVADDUI {{{
 runIVADDUI :: RunInsn
 runIVADDUI mmix insn = do
+  y <- mmixGetGRY mmix insn
+  let z = iGetZu insn
+  let re = int4Addu y z
+  --mapM (issueTrip mmix) $ arithGetEx re
+  mmixSetGRX mmix insn $ arithGetRx re
+  incPC mmix
 -- }}}
 
 -- VIIIADDU {{{
 runVIIIADDU :: RunInsn
 runVIIIADDU mmix insn = do
+  (y,z) <- mmixGetGRYZ mmix insn
+  let re = int8Addu y z
+  --mapM (issueTrip mmix) $ arithGetEx re
+  mmixSetGRX mmix insn $ arithGetRx re
+  incPC mmix
 -- }}}
 
 -- VIIIADDUI {{{
 runVIIIADDUI :: RunInsn
 runVIIIADDUI mmix insn = do
+  y <- mmixGetGRY mmix insn
+  let z = iGetZu insn
+  let re = int8Addu y z
+  --mapM (issueTrip mmix) $ arithGetEx re
+  mmixSetGRX mmix insn $ arithGetRx re
+  incPC mmix
 -- }}}
 
 -- XVIADDU {{{
 runXVIADDU :: RunInsn
 runXVIADDU mmix insn = do
+  (y,z) <- mmixGetGRYZ mmix insn
+  let re = int16Addu y z
+  --mapM (issueTrip mmix) $ arithGetEx re
+  mmixSetGRX mmix insn $ arithGetRx re
+  incPC mmix
 -- }}}
 
 -- XVIADDUI {{{
 runXVIADDUI :: RunInsn
 runXVIADDUI mmix insn = do
+  y <- mmixGetGRY mmix insn
+  let z = iGetZu insn
+  let re = int16Addu y z
+  --mapM (issueTrip mmix) $ arithGetEx re
+  mmixSetGRX mmix insn $ arithGetRx re
+  incPC mmix
 -- }}}
+
+-- }}}
+
+-- 3* integer compare/neg/shift {{{
 
 -- CMP {{{
 runCMP :: RunInsn
 runCMP mmix insn = do
+  (y,z) <- mmixGetGRYZ mmix insn
+  let re = fromOrdering <$> intCompare y z
+  --mapM (issueTrip mmix) $ arithGetEx re
+  mmixSetGRX mmix insn $ arithGetRx re
+  incPC mmix
 -- }}}
 
 -- CMPI {{{
 runCMPI :: RunInsn
 runCMPI mmix insn = do
+  y <- mmixGetGRY mmix insn
+  let z = iGetZu insn
+  let re = fromOrdering <$> intCompare y z
+  --mapM (issueTrip mmix) $ arithGetEx re
+  mmixSetGRX mmix insn $ arithGetRx re
+  incPC mmix
 -- }}}
 
 -- CMPU {{{
 runCMPU :: RunInsn
 runCMPU mmix insn = do
+  (y,z) <- mmixGetGRYZ mmix insn
+  let re = fromOrdering <$> intCompareu y z
+  --mapM (issueTrip mmix) $ arithGetEx re
+  mmixSetGRX mmix insn $ arithGetRx re
+  incPC mmix
 -- }}}
 
 -- CMPUI {{{
 runCMPUI :: RunInsn
 runCMPUI mmix insn = do
+  y <- mmixGetGRY mmix insn
+  let z = iGetZu insn
+  let re = fromOrdering <$> intCompareu y z
+  --mapM (issueTrip mmix) $ arithGetEx re
+  mmixSetGRX mmix insn $ arithGetRx re
+  incPC mmix
 -- }}}
 
 -- NEG {{{
 runNEG :: RunInsn
 runNEG mmix insn = do
+  let y = iGetYu insn
+  z <- mmixGetGRZ mmix insn
+  let re = intSub y z
+  mapM (issueTrip mmix) $ arithGetEx re
+  mmixSetGRX mmix insn $ arithGetRx re
+  incPC mmix
 -- }}}
 
 -- NEGI {{{
 runNEGI :: RunInsn
 runNEGI mmix insn = do
+  let y = iGetYu insn
+  let z = iGetZu insn
+  let re = intSub y z
+  mapM (issueTrip mmix) $ arithGetEx re
+  mmixSetGRX mmix insn $ arithGetRx re
+  incPC mmix
 -- }}}
 
 -- NEGU {{{
 runNEGU :: RunInsn
 runNEGU mmix insn = do
+  let y = iGetYu insn
+  z <- mmixGetGRZ mmix insn
+  let re = intSubu y z
+  --mapM (issueTrip mmix) $ arithGetEx re
+  mmixSetGRX mmix insn $ arithGetRx re
+  incPC mmix
 -- }}}
 
 -- NEGUI {{{
 runNEGUI :: RunInsn
 runNEGUI mmix insn = do
+  let y = iGetYu insn
+  let z = iGetZu insn
+  let re = intSubu y z
+  --mapM (issueTrip mmix) $ arithGetEx re
+  mmixSetGRX mmix insn $ arithGetRx re
+  incPC mmix
 -- }}}
 
 -- SL {{{
 runSL :: RunInsn
 runSL mmix insn = do
+  (y,z) <- mmixGetGRYZ mmix insn
+  let re = bitSL y z
+  mapM (issueTrip mmix) $ arithGetEx re
+  mmixSetGRX mmix insn $ arithGetRx re
+  incPC mmix
 -- }}}
 
 -- SLI {{{
 runSLI :: RunInsn
 runSLI mmix insn = do
+  y <- mmixGetGRY mmix insn
+  let z = iGetZu insn
+  let re = bitSL y z
+  mapM (issueTrip mmix) $ arithGetEx re
+  mmixSetGRX mmix insn $ arithGetRx re
+  incPC mmix
 -- }}}
 
 -- SLU {{{
 runSLU :: RunInsn
 runSLU mmix insn = do
+  (y,z) <- mmixGetGRYZ mmix insn
+  let re = bitSLu y z
+  --mapM (issueTrip mmix) $ arithGetEx re
+  mmixSetGRX mmix insn $ arithGetRx re
+  incPC mmix
 -- }}}
 
 -- SLUI {{{
 runSLUI :: RunInsn
 runSLUI mmix insn = do
+  y <- mmixGetGRY mmix insn
+  let z = iGetZu insn
+  let re = bitSLu y z
+  --mapM (issueTrip mmix) $ arithGetEx re
+  mmixSetGRX mmix insn $ arithGetRx re
+  incPC mmix
 -- }}}
 
 -- SR {{{
 runSR :: RunInsn
 runSR mmix insn = do
+  (y,z) <- mmixGetGRYZ mmix insn
+  let re = bitSR y z
+  --mapM (issueTrip mmix) $ arithGetEx re
+  mmixSetGRX mmix insn $ arithGetRx re
+  incPC mmix
 -- }}}
 
 -- SRI {{{
 runSRI :: RunInsn
 runSRI mmix insn = do
+  y <- mmixGetGRY mmix insn
+  let z = iGetZu insn
+  let re = bitSR y z
+  --mapM (issueTrip mmix) $ arithGetEx re
+  mmixSetGRX mmix insn $ arithGetRx re
+  incPC mmix
 -- }}}
 
 -- SRU {{{
 runSRU :: RunInsn
 runSRU mmix insn = do
+  (y,z) <- mmixGetGRYZ mmix insn
+  let re = bitSRu y z
+  --mapM (issueTrip mmix) $ arithGetEx re
+  mmixSetGRX mmix insn $ arithGetRx re
+  incPC mmix
 -- }}}
 
 -- SRUI {{{
 runSRUI :: RunInsn
 runSRUI mmix insn = do
+  y <- mmixGetGRY mmix insn
+  let z = iGetZu insn
+  let re = bitSRu y z
+  --mapM (issueTrip mmix) $ arithGetEx re
+  mmixSetGRX mmix insn $ arithGetRx re
+  incPC mmix
 -- }}}
+
+-- }}}
+
+-- TODO
+-- 4* branch {{{
 
 -- BN {{{
 runBN :: RunInsn
@@ -1025,6 +1280,11 @@ runBEVB :: RunInsn
 runBEVB mmix insn = do
 -- }}}
 
+-- }}}
+
+-- TODO
+-- 5* probable branch {{{
+
 -- PBN {{{
 runPBN :: RunInsn
 runPBN mmix insn = do
@@ -1105,165 +1365,289 @@ runPBEVB :: RunInsn
 runPBEVB mmix insn = do
 -- }}}
 
+-- }}}
+
+-- 6* conditional set {{{
+
 -- CSN {{{
 runCSN :: RunInsn
 runCSN mmix insn = do
+  (y,z) <- mmixGetGRYZ mmix insn
+  when (testN y) $ mmixSetGRX mmix insn z
+  incPC mmix
 -- }}}
 
 -- CSNI {{{
 runCSNI :: RunInsn
 runCSNI mmix insn = do
+  y <- mmixGetGRY mmix insn
+  let z = iGetZu insn
+  when (testN y) $ mmixSetGRX mmix insn z
+  incPC mmix
 -- }}}
 
 -- CSZ {{{
 runCSZ :: RunInsn
 runCSZ mmix insn = do
+  (y,z) <- mmixGetGRYZ mmix insn
+  when (testZ y) $ mmixSetGRX mmix insn z
+  incPC mmix
 -- }}}
 
 -- CSZI {{{
 runCSZI :: RunInsn
 runCSZI mmix insn = do
+  y <- mmixGetGRY mmix insn
+  let z = iGetZu insn
+  when (testZ y) $ mmixSetGRX mmix insn z
+  incPC mmix
 -- }}}
 
 -- CSP {{{
 runCSP :: RunInsn
 runCSP mmix insn = do
+  (y,z) <- mmixGetGRYZ mmix insn
+  when (testP y) $ mmixSetGRX mmix insn z
+  incPC mmix
 -- }}}
 
 -- CSPI {{{
 runCSPI :: RunInsn
 runCSPI mmix insn = do
+  y <- mmixGetGRY mmix insn
+  let z = iGetZu insn
+  when (testP y) $ mmixSetGRX mmix insn z
+  incPC mmix
 -- }}}
 
 -- CSOD {{{
 runCSOD :: RunInsn
 runCSOD mmix insn = do
+  (y,z) <- mmixGetGRYZ mmix insn
+  when (testODD y) $ mmixSetGRX mmix insn z
+  incPC mmix
 -- }}}
 
 -- CSODI {{{
 runCSODI :: RunInsn
 runCSODI mmix insn = do
+  y <- mmixGetGRY mmix insn
+  let z = iGetZu insn
+  when (testODD y) $ mmixSetGRX mmix insn z
+  incPC mmix
 -- }}}
 
 -- CSNN {{{
 runCSNN :: RunInsn
 runCSNN mmix insn = do
+  (y,z) <- mmixGetGRYZ mmix insn
+  when (testNN y) $ mmixSetGRX mmix insn z
+  incPC mmix
 -- }}}
 
 -- CSNNI {{{
 runCSNNI :: RunInsn
 runCSNNI mmix insn = do
+  y <- mmixGetGRY mmix insn
+  let z = iGetZu insn
+  when (testNN y) $ mmixSetGRX mmix insn z
+  incPC mmix
 -- }}}
 
 -- CSNZ {{{
 runCSNZ :: RunInsn
 runCSNZ mmix insn = do
+  (y,z) <- mmixGetGRYZ mmix insn
+  when (testNZ y) $ mmixSetGRX mmix insn z
+  incPC mmix
 -- }}}
 
 -- CSNZI {{{
 runCSNZI :: RunInsn
 runCSNZI mmix insn = do
+  y <- mmixGetGRY mmix insn
+  let z = iGetZu insn
+  when (testNZ y) $ mmixSetGRX mmix insn z
+  incPC mmix
 -- }}}
 
 -- CSNP {{{
 runCSNP :: RunInsn
 runCSNP mmix insn = do
+  (y,z) <- mmixGetGRYZ mmix insn
+  when (testNP y) $ mmixSetGRX mmix insn z
+  incPC mmix
 -- }}}
 
 -- CSNPI {{{
 runCSNPI :: RunInsn
 runCSNPI mmix insn = do
+  y <- mmixGetGRY mmix insn
+  let z = iGetZu insn
+  when (testNP y) $ mmixSetGRX mmix insn z
+  incPC mmix
 -- }}}
 
 -- CSEV {{{
 runCSEV :: RunInsn
 runCSEV mmix insn = do
+  (y,z) <- mmixGetGRYZ mmix insn
+  when (testEVEN y) $ mmixSetGRX mmix insn z
+  incPC mmix
 -- }}}
 
 -- CSEVI {{{
 runCSEVI :: RunInsn
 runCSEVI mmix insn = do
+  y <- mmixGetGRY mmix insn
+  let z = iGetZu insn
+  when (testEVEN y) $ mmixSetGRX mmix insn z
+  incPC mmix
 -- }}}
+
+-- }}}
+
+-- 7* zero or set {{{
 
 -- ZSN {{{
 runZSN :: RunInsn
 runZSN mmix insn = do
+  (y,z) <- mmixGetGRYZ mmix insn
+  mmixSetGRX mmix insn $ if testN y then z else 0
+  incPC mmix
 -- }}}
 
 -- ZSNI {{{
 runZSNI :: RunInsn
 runZSNI mmix insn = do
+  y <- mmixGetGRY mmix insn
+  let z = iGetZu insn
+  mmixSetGRX mmix insn $ if testN y then z else 0
+  incPC mmix
 -- }}}
 
 -- ZSZ {{{
 runZSZ :: RunInsn
 runZSZ mmix insn = do
+  (y,z) <- mmixGetGRYZ mmix insn
+  mmixSetGRX mmix insn $ if testN y then z else 0
+  incPC mmix
 -- }}}
 
 -- ZSZI {{{
 runZSZI :: RunInsn
 runZSZI mmix insn = do
+  y <- mmixGetGRY mmix insn
+  let z = iGetZu insn
+  mmixSetGRX mmix insn $ if testN y then z else 0
+  incPC mmix
 -- }}}
 
 -- ZSP {{{
 runZSP :: RunInsn
 runZSP mmix insn = do
+  (y,z) <- mmixGetGRYZ mmix insn
+  mmixSetGRX mmix insn $ if testP y then z else 0
+  incPC mmix
 -- }}}
 
 -- ZSPI {{{
 runZSPI :: RunInsn
 runZSPI mmix insn = do
+  y <- mmixGetGRY mmix insn
+  let z = iGetZu insn
+  mmixSetGRX mmix insn $ if testP y then z else 0
+  incPC mmix
 -- }}}
 
 -- ZSOD {{{
 runZSOD :: RunInsn
 runZSOD mmix insn = do
+  (y,z) <- mmixGetGRYZ mmix insn
+  mmixSetGRX mmix insn $ if testODD y then z else 0
+  incPC mmix
 -- }}}
 
 -- ZSODI {{{
 runZSODI :: RunInsn
 runZSODI mmix insn = do
+  y <- mmixGetGRY mmix insn
+  let z = iGetZu insn
+  mmixSetGRX mmix insn $ if testODD y then z else 0
+  incPC mmix
 -- }}}
 
 -- ZSNN {{{
 runZSNN :: RunInsn
 runZSNN mmix insn = do
+  (y,z) <- mmixGetGRYZ mmix insn
+  mmixSetGRX mmix insn $ if testNN y then z else 0
+  incPC mmix
 -- }}}
 
 -- ZSNNI {{{
 runZSNNI :: RunInsn
 runZSNNI mmix insn = do
+  y <- mmixGetGRY mmix insn
+  let z = iGetZu insn
+  mmixSetGRX mmix insn $ if testNN y then z else 0
+  incPC mmix
 -- }}}
 
 -- ZSNZ {{{
 runZSNZ :: RunInsn
 runZSNZ mmix insn = do
+  (y,z) <- mmixGetGRYZ mmix insn
+  mmixSetGRX mmix insn $ if testNZ y then z else 0
+  incPC mmix
 -- }}}
 
 -- ZSNZI {{{
 runZSNZI :: RunInsn
 runZSNZI mmix insn = do
+  y <- mmixGetGRY mmix insn
+  let z = iGetZu insn
+  mmixSetGRX mmix insn $ if testNZ y then z else 0
+  incPC mmix
 -- }}}
 
 -- ZSNP {{{
 runZSNP :: RunInsn
 runZSNP mmix insn = do
+  (y,z) <- mmixGetGRYZ mmix insn
+  mmixSetGRX mmix insn $ if testNP y then z else 0
+  incPC mmix
 -- }}}
 
 -- ZSNPI {{{
 runZSNPI :: RunInsn
 runZSNPI mmix insn = do
+  y <- mmixGetGRY mmix insn
+  let z = iGetZu insn
+  mmixSetGRX mmix insn $ if testNP y then z else 0
+  incPC mmix
 -- }}}
 
 -- ZSEV {{{
 runZSEV :: RunInsn
 runZSEV mmix insn = do
+  (y,z) <- mmixGetGRYZ mmix insn
+  mmixSetGRX mmix insn $ if testEVEN y then z else 0
+  incPC mmix
 -- }}}
 
 -- ZSEVI {{{
 runZSEVI :: RunInsn
 runZSEVI mmix insn = do
+  y <- mmixGetGRY mmix insn
+  let z = iGetZu insn
+  mmixSetGRX mmix insn $ if testEVEN y then z else 0
+  incPC mmix
 -- }}}
+
+-- }}}
+
+-- 8* load {{{
 
 -- LDB {{{
 runLDB :: RunInsn
@@ -1345,6 +1729,10 @@ runLDOUI :: RunInsn
 runLDOUI mmix insn = do
 -- }}}
 
+-- }}}
+
+-- 9* system ?? {{{
+
 -- LDSF {{{
 runLDSF :: RunInsn
 runLDSF mmix insn = do
@@ -1424,6 +1812,10 @@ runGO mmix insn = do
 runGOI :: RunInsn
 runGOI mmix insn = do
 -- }}}
+
+-- }}}
+
+-- a* store {{{
 
 -- STB {{{
 runSTB :: RunInsn
@@ -1505,6 +1897,10 @@ runSTOUI :: RunInsn
 runSTOUI mmix insn = do
 -- }}}
 
+-- }}}
+
+-- b* system ? {{{
+
 -- STSF {{{
 runSTSF :: RunInsn
 runSTSF mmix insn = do
@@ -1584,6 +1980,10 @@ runPUSHGO mmix insn = do
 runPUSHGOI :: RunInsn
 runPUSHGOI mmix insn = do
 -- }}}
+
+-- }}}
+
+-- c* bits {{{
 
 -- OR {{{
 runOR :: RunInsn
@@ -1665,6 +2065,10 @@ runNXORI :: RunInsn
 runNXORI mmix insn = do
 -- }}}
 
+-- }}}
+
+-- d* {{{
+
 -- BDIF {{{
 runBDIF :: RunInsn
 runBDIF mmix insn = do
@@ -1744,6 +2148,10 @@ runMXOR mmix insn = do
 runMXORI :: RunInsn
 runMXORI mmix insn = do
 -- }}}
+
+-- }}}
+
+-- e* {{{
 
 -- SETH {{{
 runSETH :: RunInsn
@@ -1825,6 +2233,10 @@ runANDNL :: RunInsn
 runANDNL mmix insn = do
 -- }}}
 
+-- }}}
+
+-- f* {{{
+
 -- JMP {{{
 runJMP :: RunInsn
 runJMP mmix insn = do
@@ -1904,7 +2316,8 @@ runGET mmix insn = do
 runTRIP :: RunInsn
 runTRIP mmix insn = do
 -- }}}
--}
+
+-- }}}
 
 -- }}}
 
