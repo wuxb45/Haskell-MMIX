@@ -2273,87 +2273,160 @@ runMXORI mmix insn = do
 
 -- }}}
 
--- TODO
+-- done
 -- e* {{{
 
 -- SETH {{{
 runSETH :: RunInsn
 runSETH mmix insn = do
+  let yz = iGetYZu insn
+  mmixSetGRX mmix insn $ yz `shiftL` 48
+  incPC mmix
 -- }}}
 
 -- SETMH {{{
 runSETMH :: RunInsn
 runSETMH mmix insn = do
+  let yz = iGetYZu insn
+  mmixSetGRX mmix insn $ yz `shiftL` 32
+  incPC mmix
 -- }}}
 
 -- SETML {{{
 runSETML :: RunInsn
 runSETML mmix insn = do
+  let yz = iGetYZu insn
+  mmixSetGRX mmix insn $ yz `shiftL` 16
+  incPC mmix
 -- }}}
 
 -- SETL {{{
 runSETL :: RunInsn
 runSETL mmix insn = do
+  let yz = iGetYZu insn
+  mmixSetGRX mmix insn $ yz
+  incPC mmix
 -- }}}
 
--- INCH {{{
+-- INCH 'increase by high wyde' {{{
 runINCH :: RunInsn
 runINCH mmix insn = do
+  let yz = iGetYZu insn
+  x <- mmixGetGRX mmix insn
+  let x' = intAddu x $ yz `shiftL` 48
+  mmixSetGRX mmix insn x'
+  incPC mmix
+  
 -- }}}
 
 -- INCMH {{{
 runINCMH :: RunInsn
 runINCMH mmix insn = do
+  let yz = iGetYZu insn
+  x <- mmixGetGRX mmix insn
+  let x' = intAddu x $ yz `shiftL` 32
+  mmixSetGRX mmix insn x'
+  incPC mmix
 -- }}}
 
 -- INCML {{{
 runINCML :: RunInsn
 runINCML mmix insn = do
+  let yz = iGetYZu insn
+  x <- mmixGetGRX mmix insn
+  let x' = intAddu x $ yz `shiftL` 16
+  mmixSetGRX mmix insn x'
+  incPC mmix
 -- }}}
 
 -- INCL {{{
 runINCL :: RunInsn
 runINCL mmix insn = do
+  let yz = iGetYZu insn
+  x <- mmixGetGRX mmix insn
+  let x' = intAddu x yz
+  mmixSetGRX mmix insn x'
+  incPC mmix
 -- }}}
 
 -- ORH {{{
 runORH :: RunInsn
 runORH mmix insn = do
+  let yz = iGetYZu insn
+  x <- mmixGetGRX mmix insn
+  let x' = x .|. (yz `shiftL` 48)
+  mmixSetGRX mmix insn x'
+  incPC mmix
 -- }}}
 
 -- ORMH {{{
 runORMH :: RunInsn
 runORMH mmix insn = do
+  let yz = iGetYZu insn
+  x <- mmixGetGRX mmix insn
+  let x' = x .|. (yz `shiftL` 32)
+  mmixSetGRX mmix insn x'
+  incPC mmix
 -- }}}
 
 -- ORML {{{
 runORML :: RunInsn
 runORML mmix insn = do
+  let yz = iGetYZu insn
+  x <- mmixGetGRX mmix insn
+  let x' = x .|. (yz `shiftL` 16)
+  mmixSetGRX mmix insn x'
+  incPC mmix
 -- }}}
 
 -- ORL {{{
 runORL :: RunInsn
 runORL mmix insn = do
+  let yz = iGetYZu insn
+  x <- mmixGetGRX mmix insn
+  let x' = x .|. yz
+  mmixSetGRX mmix insn x'
+  incPC mmix
 -- }}}
 
 -- ANDNH {{{
 runANDNH :: RunInsn
 runANDNH mmix insn = do
+  let yz = iGetYZu insn
+  x <- mmixGetGRX mmix insn
+  let x' = x .&. complement (yz `shiftL` 48)
+  mmixSetGRX mmix insn x'
+  incPC mmix
 -- }}}
 
 -- ANDNMH {{{
 runANDNMH :: RunInsn
 runANDNMH mmix insn = do
+  let yz = iGetYZu insn
+  x <- mmixGetGRX mmix insn
+  let x' = x .&. complement (yz `shiftL` 32)
+  mmixSetGRX mmix insn x'
+  incPC mmix
 -- }}}
 
 -- ANDNML {{{
 runANDNML :: RunInsn
 runANDNML mmix insn = do
+  let yz = iGetYZu insn
+  x <- mmixGetGRX mmix insn
+  let x' = x .&. complement (yz `shiftL` 16)
+  mmixSetGRX mmix insn x'
+  incPC mmix
 -- }}}
 
 -- ANDNL {{{
 runANDNL :: RunInsn
 runANDNL mmix insn = do
+  let yz = iGetYZu insn
+  x <- mmixGetGRX mmix insn
+  let x' = x .&. complement yz
+  mmixSetGRX mmix insn x'
+  incPC mmix
 -- }}}
 
 -- }}}
