@@ -120,6 +120,7 @@ module MMIX.Basics (
   mmixGetGRX, mmixGetGRSX, mmixGetGRFX,
   mmixGetGRY, mmixGetGRSY, mmixGetGRFY,
   mmixGetGRZ, mmixGetGRSZ, mmixGetGRFZ,
+  mmixGetGRYZ, mmixGetGRSYZ, mmixGetGRFYZ,
 -- }}}
 -- virtual address mapping {{{
   vaddrFaddr, vaddrFseg, vaddrFsign,
@@ -138,6 +139,7 @@ module MMIX.Basics (
 -- }}}
 -- arithmetic basis {{{
   ArithEx (..), cvAEtoT, cvAEtoBit,
+  ArithRx (..),
   Hexadeca (..),
   fromOrdering, fromBool,
 -- }}}
@@ -161,7 +163,7 @@ module MMIX.Basics (
   fpBsign, fpFsign, fpFe, fpFf, fpFse, fpBnan, fpFpl,
   sfpBsign, sfpFsign, sfpFe, sfpFf, sfpFse, sfpBnan, sfpFpl,
 
-  RoundMode (..), toRoundMode, toRoundModeImm,
+  RoundMode (..), toRoundModeRaw, toRoundMode, toRoundModeImm,
 
   FSign (..), toFSign, toFSignRaw, fpSetFSignRaw,
   sfpSetFSignRaw, flipFSign, mdFSign,
@@ -1843,14 +1845,14 @@ tripEntry ATRIPX = 0x80
 
 -- tripAEBit: trip to arith-ex. bit {{{
 tripAEBit :: TRIP -> Octa
-tripAEBit ATRIPD = fldMask rAFEventD
-tripAEBit ATRIPV = fldMask rAFEventV
-tripAEBit ATRIPW = fldMask rAFEventW
-tripAEBit ATRIPI = fldMask rAFEventI
-tripAEBit ATRIPO = fldMask rAFEventO
-tripAEBit ATRIPU = fldMask rAFEventU
-tripAEBit ATRIPZ = fldMask rAFEventZ
-tripAEBit ATRIPX = fldMask rAFEventX
+tripAEBit ATRIPD = bit $ cast rABEventD
+tripAEBit ATRIPV = bit $ cast rABEventV
+tripAEBit ATRIPW = bit $ cast rABEventW
+tripAEBit ATRIPI = bit $ cast rABEventI
+tripAEBit ATRIPO = bit $ cast rABEventO
+tripAEBit ATRIPU = bit $ cast rABEventU
+tripAEBit ATRIPZ = bit $ cast rABEventZ
+tripAEBit ATRIPX = bit $ cast rABEventX
 tripAEBit ITRIP  = 0
 -- }}}
 
