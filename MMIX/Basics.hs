@@ -2731,7 +2731,9 @@ sfpUnpacksef s 0 f = Number s' e' f'
 -- inf (e == 255 && f == 0)
 sfpUnpacksef s 255 0 = Inf $ toFSign s
 -- nan (e == 255 && f > 0)
-sfpUnpacksef s 255 f = NaN (toFSign s) (sfpToNaNRaw f) $ fldGet sfpFpl f
+sfpUnpacksef s 255 f = NaN (toFSign s)
+                           (sfpToNaNRaw f)
+                           (fldGet sfpFpl f `shiftL` 29)
 -- normal (0 < e < 255)
 sfpUnpacksef s e f = Number s' e' f'
   where
@@ -2815,7 +2817,9 @@ sfpPack' _ (Zero s) = return $ sfpSetFSignRaw s 0
 sfpPack' _ (Inf s) = return $ fldSet sfpFe 255 $ sfpSetFSignRaw s 0
 sfpPack' _ (NaN s nantype pl) = ArithRx ex nan
   where
-    nan = sfpSetFSignRaw s $ sfpSetNaNPlRaw (cast pl) $ castSFtoT sfpQNaN
+    nan = sfpSetFSignRaw s $
+            sfpSetNaNPlRaw (cast pl `shiftR` 29) $
+            castSFtoT sfpQNaN
     ex = if nantype == SignalNaN then [AEI] else []
 
 -- }}}

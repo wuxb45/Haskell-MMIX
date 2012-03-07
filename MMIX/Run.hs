@@ -425,9 +425,11 @@ issueDTrapPx = issueDTrap rQBx
 issueDTrapPn :: MMIX -> IO ()
 issueDTrapPn = issueDTrap rQBn
 
+-- privileged instruction
 issueDTrapPk :: MMIX -> IO ()
 issueDTrapPk = issueDTrap rQBk
 
+-- breaks the rule
 issueDTrapPb :: MMIX -> IO ()
 issueDTrapPb = issueDTrap rQBb
 
@@ -2179,7 +2181,6 @@ runLDO mmix insn = do
   trapped <- checkTrapped mmix
   unless trapped $ mmixVLdOcta mmix insn vaddr
   incPC mmix
-
 -- }}}
 
 -- LDOI {{{
@@ -2219,8 +2220,8 @@ runLDOUI mmix insn = do
 
 -- }}}
 
--- 
--- 9* system ?? {{{
+-- done
+-- 9* special L/S; cache; TC; GO {{{
 
 -- LDSF 'load short float' {{{
 runLDSF :: RunInsn
@@ -2268,7 +2269,7 @@ runLDHTI mmix insn = do
   incPC mmix
 -- }}}
 
--- CSWAP {{{
+-- CSWAP 'compare and swap octabytes' {{{
 runCSWAP :: RunInsn
 runCSWAP mmix insn = do
   (y,z) <- mmixGetGRYZ mmix insn
@@ -2279,7 +2280,7 @@ runCSWAP mmix insn = do
   incPC mmix
 -- }}}
 
--- CSWAPI {{{
+-- CSWAPI 'compare and swap octabytes immediate' {{{
 runCSWAPI :: RunInsn
 runCSWAPI mmix insn = do
   y <- mmixGetGRY mmix insn
@@ -2291,54 +2292,91 @@ runCSWAPI mmix insn = do
   incPC mmix
 -- }}}
 
--- LDUNC {{{
+-- LDUNC 'load octa uncached' {{{
 runLDUNC :: RunInsn
 runLDUNC mmix insn = do
+  (y,z) <- mmixGetGRYZ mmix insn
+  let vaddr = y + z
+  checkVAddrRead mmix vaddr
+  trapped <- checkTrapped mmix
+  unless trapped $ mmixVLdOcta mmix insn vaddr
+  incPC mmix
 -- }}}
 
--- LDUNCI {{{
+-- LDUNCI 'load octa uncached immediate' {{{
 runLDUNCI :: RunInsn
 runLDUNCI mmix insn = do
+  y <- mmixGetGRY mmix insn
+  let z = iGetZu insn
+  let vaddr = y + z
+  checkVAddrRead mmix vaddr
+  trapped <- checkTrapped mmix
+  unless trapped $ mmixVLdOcta mmix insn vaddr
+  incPC mmix
 -- }}}
 
--- LDVTS {{{
+-- LDVTS 'load virtual translation status' {{{
 runLDVTS :: RunInsn
-runLDVTS mmix insn = do undefined
+runLDVTS mmix insn = do
+  -- just tell $X not in TC
+  -- TODO: implement a TC?
+  mmixSetGRX mmix insn 0
+  incPC mmix
 -- }}}
 
--- LDVTSI {{{
+-- LDVTSI 'load virtual translation status' {{{
 runLDVTSI :: RunInsn
-runLDVTSI mmix insn = do undefined
+runLDVTSI mmix insn = do
+  mmixSetGRX mmix insn 0
+  incPC mmix
 -- }}}
 
 -- PRELD {{{
 runPRELD :: RunInsn
-runPRELD mmix insn = do undefined
+runPRELD mmix insn = do
+  -- preload M[$Y+$Z] to M[$Y+$Z+X]
+  incPC mmix
 -- }}}
 
 -- PRELDI {{{
 runPRELDI :: RunInsn
-runPRELDI mmix insn = do undefined
+runPRELDI mmix insn = do
+  -- preload M[$Y+Z] to M[$Y+Z+X]
+  incPC mmix
 -- }}}
 
 -- PREGO {{{
 runPREGO :: RunInsn
-runPREGO mmix insn = do undefined
+runPREGO mmix insn = do
+  -- pre-goto M[$Y+$Z] to M[$Y+$Z+X]
+  incPC mmix
 -- }}}
 
 -- PREGOI {{{
 runPREGOI :: RunInsn
-runPREGOI mmix insn = do undefined
+runPREGOI mmix insn = do
+  -- pre-goto M[$Y+Z] to M[$Y+Z+X]
+  incPC mmix
 -- }}}
 
--- GO {{{
+-- GO 'go to location' {{{
 runGO :: RunInsn
-runGO mmix insn = do undefined
+runGO mmix insn = do
+  pc <- mmixGetPC mmix
+  mmixSetGRX mmix insn $ pc + 4
+  (y,z) <- mmixGetGRYZ mmix insn
+  mmixSetPC mmix $ y + z
+  
 -- }}}
 
--- GOI {{{
+-- GOI 'go to location immediate' {{{
 runGOI :: RunInsn
-runGOI mmix insn = do undefined
+runGOI mmix insn = do
+  pc <- mmixGetPC mmix
+  mmixSetGRX mmix insn $ pc + 4
+  y <- mmixGetGRY mmix insn
+  let z = iGetZu insn
+  mmixSetPC mmix $ y + z
 -- }}}
 
 -- }}}
@@ -2532,80 +2570,152 @@ runSTOUI mmix insn = do
 
 -- }}}
 
--- TODO
--- b* system ? {{{
+-- TODO (pushgo)
+-- b* special access; cache; sync {{{
 
--- STSF {{{
+-- STSF 'store short float' {{{
 runSTSF :: RunInsn
-runSTSF mmix insn = do undefined
+runSTSF mmix insn = do
+  rdm <- toRoundModeRaw <$> mmixGetSR mmix rAIx
+  (x,y,z) <- mmixGetGRXYZ mmix insn
+  let re = sfpPack rdm $ fpUnpack $ castOtoF x
+  let sfp = cast $ castSFtoT $ arithGetRx re
+  let vaddr = y + z
+  checkVAddrWrite mmix vaddr
+  trapped <- checkTrapped mmix
+  unless trapped $ mmixVStTetrau mmix vaddr sfp
+  incPC mmix
 -- }}}
 
--- STSFI {{{
+-- STSFI 'store short float immediate' {{{
 runSTSFI :: RunInsn
-runSTSFI mmix insn = do undefined
+runSTSFI mmix insn = do
+  rdm <- toRoundModeRaw <$> mmixGetSR mmix rAIx
+  (x,y) <- mmixGetGRXY mmix insn
+  let z = iGetZu insn
+  let re = sfpPack rdm $ fpUnpack $ castOtoF x
+  let sfp = cast $ castSFtoT $ arithGetRx re
+  let vaddr = y + z
+  checkVAddrWrite mmix vaddr
+  trapped <- checkTrapped mmix
+  unless trapped $ mmixVStTetrau mmix vaddr sfp
+  incPC mmix
 -- }}}
 
--- STHT {{{
+-- STHT 'store high tetra' {{{
 runSTHT :: RunInsn
-runSTHT mmix insn = do undefined
+runSTHT mmix insn = do
+  (x,y,z) <- mmixGetGRXYZ mmix insn
+  let vaddr = y + z
+  checkVAddrWrite mmix vaddr
+  trapped <- checkTrapped mmix
+  unless trapped $ mmixVStTetrau mmix vaddr $ x `shiftR` 32
+  incPC mmix
 -- }}}
 
--- STHTI {{{
+-- STHTI 'store high tetra immediate' {{{
 runSTHTI :: RunInsn
-runSTHTI mmix insn = do undefined
+runSTHTI mmix insn = do
+  (x,y) <- mmixGetGRXY mmix insn
+  let z = iGetZu insn
+  let vaddr = y + z
+  checkVAddrWrite mmix vaddr
+  trapped <- checkTrapped mmix
+  unless trapped $ mmixVStTetrau mmix vaddr $ x `shiftR` 32
+  incPC mmix
 -- }}}
 
--- STCO {{{
+-- STCO 'store constant octabyte' {{{
 runSTCO :: RunInsn
-runSTCO mmix insn = do undefined
+runSTCO mmix insn = do
+  let x = iGetXu insn
+  (y,z) <- mmixGetGRYZ mmix insn
+  let vaddr = y + z
+  checkVAddrWrite mmix vaddr
+  trapped <- checkTrapped mmix
+  unless trapped $ mmixVStOcta mmix vaddr x
+  incPC mmix
 -- }}}
 
--- STCOI {{{
+-- STCOI 'store constant octabyte immediate' {{{
 runSTCOI :: RunInsn
-runSTCOI mmix insn = do undefined
+runSTCOI mmix insn = do
+  let x = iGetXu insn
+  y <- mmixGetGRY mmix insn
+  let z = iGetZu insn
+  let vaddr = y + z
+  checkVAddrWrite mmix vaddr
+  trapped <- checkTrapped mmix
+  unless trapped $ mmixVStOcta mmix vaddr x
+  incPC mmix
 -- }}}
 
--- STUNC {{{
+-- STUNC 'store octa uncached' {{{
 runSTUNC :: RunInsn
-runSTUNC mmix insn = do undefined
+runSTUNC mmix insn = do
+  (x,y,z) <- mmixGetGRXYZ mmix insn
+  let vaddr = y + z
+  checkVAddrWrite mmix vaddr
+  trapped <- checkTrapped mmix
+  unless trapped $ mmixVStOcta mmix vaddr x
+  incPC mmix
 -- }}}
 
--- STUNCI {{{
+-- STUNCI 'store octa uncached immediate' {{{
 runSTUNCI :: RunInsn
-runSTUNCI mmix insn = do undefined
+runSTUNCI mmix insn = do
+  (x,y) <- mmixGetGRXY mmix insn
+  let z = iGetZu insn
+  let vaddr = y + z
+  checkVAddrWrite mmix vaddr
+  trapped <- checkTrapped mmix
+  unless trapped $ mmixVStOcta mmix vaddr x
+  incPC mmix
 -- }}}
 
--- SYNCD {{{
+-- SYNCD 'synchronize data' {{{
 runSYNCD :: RunInsn
-runSYNCD mmix insn = do undefined
+runSYNCD mmix insn = do
+  -- Just do nothing, update it in future.
+  incPC mmix
 -- }}}
 
--- SYNCDI {{{
+-- SYNCDI 'synchronize data immediate' {{{
 runSYNCDI :: RunInsn
-runSYNCDI mmix insn = do undefined
+runSYNCDI mmix insn = do
+  -- Just do nothing, update it in future.
+  incPC mmix
 -- }}}
 
--- PREST {{{
+-- PREST 'prestore data' {{{
 runPREST :: RunInsn
-runPREST mmix insn = do undefined
+runPREST mmix insn = do
+  -- Just do nothing, update it in future.
+  incPC mmix
 -- }}}
 
 -- PRESTI {{{
 runPRESTI :: RunInsn
-runPRESTI mmix insn = do undefined
+runPRESTI mmix insn = do
+  -- Just do nothing, update it in future.
+  incPC mmix
 -- }}}
 
 -- SYNCID {{{
 runSYNCID :: RunInsn
-runSYNCID mmix insn = do undefined
+runSYNCID mmix insn = do
+  -- Just do nothing, update it in future.
+  incPC mmix
 -- }}}
 
 -- SYNCIDI {{{
 runSYNCIDI :: RunInsn
-runSYNCIDI mmix insn = do undefined
+runSYNCIDI mmix insn = do
+  -- Just do nothing, update it in future.
+  incPC mmix
 -- }}}
 
--- PUSHGO {{{
+-- PUSHGO 'push registers and go' {{{
 runPUSHGO :: RunInsn
 runPUSHGO mmix insn = do undefined
 -- }}}
@@ -3082,17 +3192,26 @@ runPUSHJB :: RunInsn
 runPUSHJB mmix insn = do undefined
 -- }}}
 
--- GETA {{{
+-- GETA 'get address forward' {{{
 runGETA :: RunInsn
-runGETA mmix insn = do undefined
+runGETA mmix insn = do
+  pc <- mmixGetPC mmix
+  let addr = pc + (iGetYZu `shiftL` 2)
+  mmixSetGRX mmix insn addr
+  incPC mmix
 -- }}}
 
--- GETAB {{{
+-- GETAB 'get address backward' {{{
 runGETAB :: RunInsn
-runGETAB mmix insn = do undefined
+runGETAB mmix insn = do
+  pc <- mmixGetPC mmix
+  let addr = pc + (iGetYZu `shiftL` 2) - 0x40000
+  mmixSetGRX mmix insn addr
+  incPC mmix
 -- }}}
 
 -- PUT {{{
+PUT {{{
 runPUT :: RunInsn
 runPUT mmix insn = do undefined
 -- }}}
@@ -3132,9 +3251,16 @@ runSWYM :: RunInsn
 runSWYM mmix insn = do undefined
 -- }}}
 
--- GET {{{
+-- GET 'get from special register' {{{
 runGET :: RunInsn
-runGET mmix insn = do undefined
+runGET mmix insn = do
+  let z = iGetZ insn
+  if z >= 32
+  then issueDTrapPk mmix
+  else do
+    sr <- mmixGetSR mmix z
+    mmixSetGRX mmix insn sr
+  incPC mmix
 -- }}}
 
 -- TRIP {{{
