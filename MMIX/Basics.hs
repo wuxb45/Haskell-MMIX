@@ -39,6 +39,7 @@ module MMIX.Basics (
   fldMask, fldUMask, fldGet, fldSet,
   fldGetRaw, fldSetRaw, fldSet1, fldSet0,
   signExt, signExtByte, signExtWyde, signExtTetra,
+  signExtByteOcta, signExtWydeOcta, signExtTetraOcta,
 -- }}}
 -- coerce type casting {{{
   castFtoO,  castOtoF,
@@ -121,6 +122,7 @@ module MMIX.Basics (
   mmixGetGRY, mmixGetGRSY, mmixGetGRFY,
   mmixGetGRZ, mmixGetGRSZ, mmixGetGRFZ,
   mmixGetGRYZ, mmixGetGRSYZ, mmixGetGRFYZ,
+  mmixGetGRXY, mmixGetGRXYZ,
 -- }}}
 -- virtual address mapping {{{
   vaddrFaddr, vaddrFseg, vaddrFsign,
@@ -169,11 +171,11 @@ module MMIX.Basics (
   sfpSetFSignRaw, flipFSign, mdFSign,
 
   NaNType (..), fpToNaN, fpToNaNRaw, sfpToNaNRaw,
-  fpSetNaNRaw, fpSetNaNPayload,
-  fpSetNaNPayloadRaw, sfpSetNaNPayloadRaw,
+  fpSetNaNRaw, fpSetNaNPl,
+  fpSetNaNPlRaw, sfpSetNaNPlRaw,
 
   FPInfo (..),
-  fpUnpack, fpPack, sfpUnpack, sfpPack,
+  fpUnpack, fpPack, fpPackRaw, sfpUnpack, sfpPack,
 
   fpiIsNaN, fpiIsSNaN, fpiIsQNaN,
   fpiIsInf, fpiIsPInf, fpiIsNInf,
@@ -617,6 +619,15 @@ signExtWyde = signExt 15
 
 signExtTetra :: (Bits a) => a -> a
 signExtTetra = signExt 31
+
+signExtByteOcta :: Byte -> Octa
+signExtByteOcta v = signExtByte $ cast v
+
+signExtWydeOcta :: Wyde -> Octa
+signExtWydeOcta v = signExtWyde $ cast v
+
+signExtTetraOcta :: Tetra -> Octa
+signExtTetraOcta v = signExtTetra $ cast v
 
 -- }}}
 
@@ -1739,6 +1750,23 @@ mmixGetGRFYZ mmix insn = do
   return (y, z)
 -- }}}
 
+-- get $X,$Y,$Z by insn {{{
+mmixGetGRXY :: MMIX -> Insn -> IO (Octa, Octa)
+mmixGetGRXY mmix insn = do
+  x <- mmixGetGR mmix $ iGetX insn
+  y <- mmixGetGR mmix $ iGetY insn
+  return (x, y)
+-- }}}
+
+-- get $X,$Y,$Z by insn {{{
+mmixGetGRXYZ :: MMIX -> Insn -> IO (Octa, Octa, Octa)
+mmixGetGRXYZ mmix insn = do
+  x <- mmixGetGR mmix $ iGetX insn
+  y <- mmixGetGR mmix $ iGetY insn
+  z <- mmixGetGR mmix $ iGetZ insn
+  return (x, y, z)
+-- }}}
+
 -- }}}
 
 -- Virtual address mapping {{{
@@ -2385,9 +2413,8 @@ bitSAdd :: Octa -> Octa -> Octa
 bitSAdd y z = cast $ popCount $ y .&. (complement z)
 -- }}}
 
+-- how to put 8 bits togather: {{{
 --------------------------------------------------------------------
--- how to put 8 bits togather:
---
 --  xxxxxxxxiiiiiiiixxxxxxxxiiiiiiiixxxxxxxxiiiiiiiixxxxxxxxiiiiiiii
 --  and with 0x0101010101010101 ->
 --  _______a_______b_______c_______d_______e_______f_______g_______h
@@ -2405,6 +2432,7 @@ bitSAdd y z = cast $ popCount $ y .&. (complement z)
 --  | _xx__cd__gh
 --  = _xxabcdefgh
 --------------------------------------------------------------------
+-- }}}
 
 -- bitTransposition {{{
 bitTrans :: Octa -> Octa
@@ -2419,7 +2447,6 @@ bitTrans a = cvto (high, low)
         v2 = (v1 `shiftR` 7) .|. v1
         v3 = (v2 `shiftR` 14) .|. v2
 -- }}}
-
 
 -- bitMultiple: do the dirty work (XXX: slow!!!) {{{
 bitMultiple :: (Octa -> Octa -> Octa) -> Octa -> Octa -> Octa
@@ -2446,7 +2473,7 @@ bitMOr :: Octa -> Octa -> Octa
 bitMOr = bitMultiple (.|.)
 -- }}}
 
--- mxor: multiple xor
+-- mxor: multiple xor {{{
 bitMXor :: Octa -> Octa -> Octa
 bitMXor = bitMultiple xor
 -- }}}
@@ -2613,16 +2640,16 @@ fpSetNaNRaw SignalNaN val = bitSet fpBnan 0 val
 fpSetNaNRaw QuietNaN val = bitSet fpBnan 1 val
 
 -- payload -> orig -> newval
-fpSetNaNPayload :: Octa -> FP -> FP
-fpSetNaNPayload pl orig = castOtoF $ fldSet fpFpl pl $ castFtoO orig
+fpSetNaNPl :: Octa -> FP -> FP
+fpSetNaNPl pl orig = castOtoF $ fldSet fpFpl pl $ castFtoO orig
 
 -- payload -> orig -> newval
-fpSetNaNPayloadRaw :: Octa -> Octa -> Octa
-fpSetNaNPayloadRaw pl orig = fldSet fpFpl pl orig
+fpSetNaNPlRaw :: Octa -> Octa -> Octa
+fpSetNaNPlRaw pl orig = fldSet fpFpl pl orig
 
 -- payload -> orig -> newval
-sfpSetNaNPayloadRaw :: Tetra -> Tetra -> Tetra
-sfpSetNaNPayloadRaw pl orig = fldSet sfpFpl pl orig
+sfpSetNaNPlRaw :: Tetra -> Tetra -> Tetra
+sfpSetNaNPlRaw pl orig = fldSet sfpFpl pl orig
 -- }}}
 
 -- }}}
@@ -2743,7 +2770,7 @@ fpPack' _ (Zero s) = return $ fpSetFSignRaw s 0
 fpPack' _ (Inf s) = return $ fldSet fpFe 2047 $ fpSetFSignRaw s 0
 fpPack' _ (NaN s nantype pl) = ArithRx ex nan
   where
-    nan = fpSetFSignRaw s $ fpSetNaNPayloadRaw pl $ castFtoO fpQNaN
+    nan = fpSetFSignRaw s $ fpSetNaNPlRaw pl $ castFtoO fpQNaN
     ex = if nantype == SignalNaN then [AEI] else []
 
 -- for DEBUG
@@ -2751,6 +2778,13 @@ fpTester :: FP -> Bool
 fpTester fp = fp == fp'
   where (ArithRx _ fp') = fpPack RZero . fpUnpack $ fp
 
+-- }}}
+
+-- fpPackRaw {{{
+fpPackRaw :: RoundMode -> FPInfo -> FP
+fpPackRaw _ (NaN s SignalNaN 0) = fpSetFSign s $ fpSNaN
+fpPackRaw _ (NaN s SignalNaN pl) = fpSetFSign s $ fpSetNaNPl pl fpSNaN
+fpPackRaw r fpi = arithGetRx $ fpPack r fpi
 -- }}}
 
 -- sfpPack {{{
@@ -2781,7 +2815,7 @@ sfpPack' _ (Zero s) = return $ sfpSetFSignRaw s 0
 sfpPack' _ (Inf s) = return $ fldSet sfpFe 255 $ sfpSetFSignRaw s 0
 sfpPack' _ (NaN s nantype pl) = ArithRx ex nan
   where
-    nan = sfpSetFSignRaw s $ sfpSetNaNPayloadRaw (cast pl) $ castSFtoT sfpQNaN
+    nan = sfpSetFSignRaw s $ sfpSetNaNPlRaw (cast pl) $ castSFtoT sfpQNaN
     ex = if nantype == SignalNaN then [AEI] else []
 
 -- }}}

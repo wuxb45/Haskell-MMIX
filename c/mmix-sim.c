@@ -2650,6 +2650,7 @@ char *argv[];
         test_load_bkpt(ll);
         test_load_bkpt(ll + 1);
         a = g[rP];
+        // M == rP ?
         if (ll->tet == a.h && (ll + 1)->tet == a.l) {
           x.h = 0, x.l = 1;
           test_store_bkpt(ll);

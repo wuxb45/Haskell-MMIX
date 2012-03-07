@@ -13,7 +13,7 @@ module MMIX.Run (
 
 import Data.Maybe (fromMaybe)
 import Data.Bits (complement, xor, shiftL, shiftR, (.|.), (.&.))
-import Control.Monad (when, unless)
+import Control.Monad (when, unless, void)
 import Data.Functor ((<$>))
 import Debug.Trace (trace, traceShow)
 
@@ -200,6 +200,181 @@ toPAddrVMap mmix vaddr = do
     Nothing -> return Nothing
 -- }}}
       
+-- }}}
+
+-- load/store by Insn & VAddr {{{
+
+-- load (byte/wyde/tetra/octa; signed/unsigned) {{{
+
+-- load Octa {{{
+mmixVLdOcta :: MMIX -> Insn -> VAddr -> IO ()
+mmixVLdOcta mmix insn vaddr = do
+  mbPAddr <- toPAddr mmix vaddr
+  v <- case mbPAddr of
+    Just paddr -> mmixLdOcta0 mmix paddr
+    _ -> return 0
+  mmixSetGRX mmix insn v
+-- }}}
+
+-- load Tetra signed {{{
+mmixVLdTetra :: MMIX -> Insn -> VAddr -> IO ()
+mmixVLdTetra mmix insn vaddr = do
+  mbPAddr <- toPAddr mmix vaddr
+  v <- case mbPAddr of
+    Just paddr -> mmixLdTetra0 mmix paddr
+    _ -> return 0
+  mmixSetGRX mmix insn $ signExtTetraOcta v
+-- }}}
+
+-- load Wyde signed {{{
+mmixVLdWyde :: MMIX -> Insn -> VAddr -> IO ()
+mmixVLdWyde mmix insn vaddr = do
+  mbPAddr <- toPAddr mmix vaddr
+  v <- case mbPAddr of
+    Just paddr -> mmixLdWyde0 mmix paddr
+    _ -> return 0
+  mmixSetGRX mmix insn $ signExtWydeOcta v
+-- }}}
+
+-- load Byte signed {{{
+mmixVLdByte :: MMIX -> Insn -> VAddr -> IO ()
+mmixVLdByte mmix insn vaddr = do
+  mbPAddr <- toPAddr mmix vaddr
+  v <- case mbPAddr of
+    Just paddr -> mmixLdByte0 mmix paddr
+    _ -> return 0
+  mmixSetGRX mmix insn $ signExtByteOcta v
+-- }}}
+
+-- load Tetra unsigned {{{
+mmixVLdTetrau :: MMIX -> Insn -> VAddr -> IO ()
+mmixVLdTetrau mmix insn vaddr = do
+  mbPAddr <- toPAddr mmix vaddr
+  v <- case mbPAddr of
+    Just paddr -> mmixLdTetra0 mmix paddr
+    _ -> return 0
+  mmixSetGRX mmix insn $ cast v
+-- }}}
+
+-- load Wyde unsigned {{{
+mmixVLdWydeu :: MMIX -> Insn -> VAddr -> IO ()
+mmixVLdWydeu mmix insn vaddr = do
+  mbPAddr <- toPAddr mmix vaddr
+  v <- case mbPAddr of
+    Just paddr -> mmixLdWyde0 mmix paddr
+    _ -> return 0
+  mmixSetGRX mmix insn $ cast v
+-- }}}
+
+-- load Byte unsigned {{{
+mmixVLdByteu :: MMIX -> Insn -> VAddr -> IO ()
+mmixVLdByteu mmix insn vaddr = do
+  mbPAddr <- toPAddr mmix vaddr
+  v <- case mbPAddr of
+    Just paddr -> mmixLdByte0 mmix paddr
+    _ -> return 0
+  mmixSetGRX mmix insn $ cast v
+-- }}}
+
+-- load high Tetra {{{
+mmixVLdHighTetra :: MMIX -> Insn -> VAddr -> IO ()
+mmixVLdHighTetra mmix insn vaddr = do
+  mbPAddr <- toPAddr mmix vaddr
+  v <- case mbPAddr of
+    Just paddr -> mmixLdTetra0 mmix paddr
+    _ -> return 0
+  let ht = cvto (v,0)
+  mmixSetGRX mmix insn ht
+-- }}}
+
+-- }}}
+
+-- store (byte/wyde/tetra/octa; overflow/nothing) {{{
+
+mmixVStOcta :: MMIX -> VAddr -> Octa -> IO ()
+mmixVStOcta mmix vaddr v = do
+  mbPAddr <- toPAddr mmix vaddr
+  case mbPAddr of
+    Just paddr -> void $ mmixStOcta mmix paddr v
+    _ -> return ()
+
+mmixVStTetrau :: MMIX -> VAddr -> Octa -> IO ()
+mmixVStTetrau mmix vaddr v = do
+  mbPAddr <- toPAddr mmix vaddr
+  case mbPAddr of
+    Just paddr -> void $ mmixStTetra mmix paddr $ cast v
+    _ -> return ()
+
+mmixVStWydeu :: MMIX -> VAddr -> Octa -> IO ()
+mmixVStWydeu mmix vaddr v = do
+  mbPAddr <- toPAddr mmix vaddr
+  case mbPAddr of
+    Just paddr -> void $ mmixStWyde mmix paddr $ cast v
+    _ -> return ()
+
+mmixVStByteu :: MMIX -> VAddr -> Octa -> IO ()
+mmixVStByteu mmix vaddr v = do
+  mbPAddr <- toPAddr mmix vaddr
+  case mbPAddr of
+    Just paddr -> void $ mmixStByte mmix paddr $ cast v
+    _ -> return ()
+
+mmixVStTetra :: MMIX -> VAddr -> Octa -> IO ()
+mmixVStTetra mmix vaddr v = do
+  let high = fldGet (63,31) v
+  let highSame = high == 0 || high == 0x1ffffffff
+  unless highSame $ issueATrip mmix AEV
+  mmixVStTetrau mmix vaddr v
+
+mmixVStWyde :: MMIX -> VAddr -> Octa -> IO ()
+mmixVStWyde mmix vaddr v = do
+  let high = fldGet (63,15) v
+  let highSame = high == 0 || high == 0x1ffffffffffff
+  unless highSame $ issueATrip mmix AEV
+  mmixVStWydeu mmix vaddr v
+
+mmixVStByte :: MMIX -> VAddr -> Octa -> IO ()
+mmixVStByte mmix vaddr v = do
+  let high = fldGet (63,7) v
+  let highSame = high == 0 || high == 0x1ffffffffffffff
+  unless highSame $ issueATrip mmix AEV
+  mmixVStByteu mmix vaddr v
+
+-- }}}
+
+-- load SFP and convert to FP {{{
+mmixVLdSF :: MMIX -> Insn -> VAddr -> IO ()
+mmixVLdSF mmix insn vaddr = do
+  rdm <- toRoundModeRaw <$> mmixGetSR mmix rAIx
+  mbPAddr <- toPAddr mmix vaddr
+  sfp <- case mbPAddr of
+    Just paddr -> mmixLdTetra0 mmix paddr
+    _ -> return 0
+  let fp = fpPackRaw rdm $ sfpUnpack $ castTtoSF sfp
+  mmixSetGRX mmix insn $ castFtoO fp
+-- }}}
+
+-- CSwap: if M == rP then M=$X,$X=1 else rP=M,$X=0 {{{
+mmixCSwap :: MMIX -> Insn -> VAddr -> IO ()
+mmixCSwap mmix insn vaddr = do
+  x <- mmixGetGRX mmix insn
+  rP <- mmixGetSR mmix rPIx
+  mbPAddr <- toPAddr mmix vaddr
+  v <- case mbPAddr of
+    Just paddr -> mmixLdOcta0 mmix paddr
+    _ -> return 0
+  if v == rP
+  then do
+    case mbPAddr of
+      Just paddr -> void $ mmixStOcta mmix paddr x
+      _ -> return ()
+    mmixSetGRX mmix insn 1
+  else do
+    mmixSetSR mmix rPIx v
+    mmixSetGRX mmix insn 0
+
+-- }}}
+
 -- }}}
 
 -- issue Trip/Trap {{{
@@ -503,10 +678,22 @@ runPAddr mmix paddr = do
     Nothing -> trace "fuck me! shit!" $ return ()
 -- }}}
 
+-- branch helper {{{
+branchForward :: MMIX -> Insn -> IO ()
+branchForward mmix insn = do
+  pc <- mmixGetPC mmix
+  let npc = pc + (iGetYZu insn `shiftL` 2)
+  mmixSetPC mmix npc
+
+branchBackward :: MMIX -> Insn -> IO ()
+branchBackward mmix insn = do
+  pc <- mmixGetPC mmix
+  let npc = pc + (iGetYZu insn `shiftL` 2) - 0x40000
+  mmixSetPC mmix npc
+-- }}}
 
 runInsn :: MMIX -> Insn -> IO ()
 runInsn mmix insn = undefined --TODO: call runXXXinsn
-
 
 -- }}}
 
@@ -1262,172 +1449,300 @@ runSRUI mmix insn = do
 
 -- }}}
 
--- TODO
+-- done
 -- 4* branch {{{
 
 -- BN {{{
 runBN :: RunInsn
-runBN mmix insn = do undefined
+runBN mmix insn = do
+  x <- mmixGetGRX mmix insn
+  if testN x
+  then branchForward mmix insn
+  else incPC mmix
 -- }}}
 
 -- BNB {{{
 runBNB :: RunInsn
-runBNB mmix insn = do undefined
+runBNB mmix insn = do
+  x <- mmixGetGRX mmix insn
+  if testN x
+  then branchBackward mmix insn
+  else incPC mmix
 -- }}}
 
 -- BZ {{{
 runBZ :: RunInsn
-runBZ mmix insn = do undefined
+runBZ mmix insn = do
+  x <- mmixGetGRX mmix insn
+  if testZ x
+  then branchForward mmix insn
+  else incPC mmix
 -- }}}
 
 -- BZB {{{
 runBZB :: RunInsn
-runBZB mmix insn = do undefined
+runBZB mmix insn = do
+  x <- mmixGetGRX mmix insn
+  if testZ x
+  then branchBackward mmix insn
+  else incPC mmix
 -- }}}
 
 -- BP {{{
 runBP :: RunInsn
-runBP mmix insn = do undefined
+runBP mmix insn = do
+  x <- mmixGetGRX mmix insn
+  if testP x
+  then branchForward mmix insn
+  else incPC mmix
 -- }}}
 
 -- BPB {{{
 runBPB :: RunInsn
-runBPB mmix insn = do undefined
+runBPB mmix insn = do
+  x <- mmixGetGRX mmix insn
+  if testP x
+  then branchBackward mmix insn
+  else incPC mmix
 -- }}}
 
 -- BOD {{{
 runBOD :: RunInsn
-runBOD mmix insn = do undefined
+runBOD mmix insn = do
+  x <- mmixGetGRX mmix insn
+  if testODD x
+  then branchForward mmix insn
+  else incPC mmix
 -- }}}
 
 -- BODB {{{
 runBODB :: RunInsn
-runBODB mmix insn = do undefined
+runBODB mmix insn = do
+  x <- mmixGetGRX mmix insn
+  if testODD x
+  then branchBackward mmix insn
+  else incPC mmix
 -- }}}
 
 -- BNN {{{
 runBNN :: RunInsn
-runBNN mmix insn = do undefined
+runBNN mmix insn = do
+  x <- mmixGetGRX mmix insn
+  if testNN x
+  then branchForward mmix insn
+  else incPC mmix
 -- }}}
 
 -- BNNB {{{
 runBNNB :: RunInsn
-runBNNB mmix insn = do undefined
+runBNNB mmix insn = do
+  x <- mmixGetGRX mmix insn
+  if testNN x
+  then branchBackward mmix insn
+  else incPC mmix
 -- }}}
 
 -- BNZ {{{
 runBNZ :: RunInsn
-runBNZ mmix insn = do undefined
+runBNZ mmix insn = do
+  x <- mmixGetGRX mmix insn
+  if testNZ x
+  then branchForward mmix insn
+  else incPC mmix
 -- }}}
 
 -- BNZB {{{
 runBNZB :: RunInsn
-runBNZB mmix insn = do undefined
+runBNZB mmix insn = do
+  x <- mmixGetGRX mmix insn
+  if testNZ x
+  then branchBackward mmix insn
+  else incPC mmix
 -- }}}
 
 -- BNP {{{
 runBNP :: RunInsn
-runBNP mmix insn = do undefined
+runBNP mmix insn = do
+  x <- mmixGetGRX mmix insn
+  if testNP x
+  then branchForward mmix insn
+  else incPC mmix
 -- }}}
 
 -- BNPB {{{
 runBNPB :: RunInsn
-runBNPB mmix insn = do undefined
+runBNPB mmix insn = do
+  x <- mmixGetGRX mmix insn
+  if testNP x
+  then branchBackward mmix insn
+  else incPC mmix
 -- }}}
 
 -- BEV {{{
 runBEV :: RunInsn
-runBEV mmix insn = do undefined
+runBEV mmix insn = do
+  x <- mmixGetGRX mmix insn
+  if testEVEN x
+  then branchForward mmix insn
+  else incPC mmix
 -- }}}
 
 -- BEVB {{{
 runBEVB :: RunInsn
-runBEVB mmix insn = do undefined
+runBEVB mmix insn = do
+  x <- mmixGetGRX mmix insn
+  if testEVEN x
+  then branchBackward mmix insn
+  else incPC mmix
 -- }}}
 
 -- }}}
 
--- TODO
+-- done
 -- 5* probable branch {{{
 
 -- PBN {{{
 runPBN :: RunInsn
-runPBN mmix insn = do undefined
+runPBN mmix insn = do
+  x <- mmixGetGRX mmix insn
+  if testN x
+  then branchForward mmix insn
+  else incPC mmix
 -- }}}
 
 -- PBNB {{{
 runPBNB :: RunInsn
-runPBNB mmix insn = do undefined
+runPBNB mmix insn = do
+  x <- mmixGetGRX mmix insn
+  if testN x
+  then branchBackward mmix insn
+  else incPC mmix
 -- }}}
 
 -- PBZ {{{
 runPBZ :: RunInsn
-runPBZ mmix insn = do undefined
+runPBZ mmix insn = do
+  x <- mmixGetGRX mmix insn
+  if testZ x
+  then branchForward mmix insn
+  else incPC mmix
 -- }}}
 
 -- PBZB {{{
 runPBZB :: RunInsn
-runPBZB mmix insn = do undefined
+runPBZB mmix insn = do
+  x <- mmixGetGRX mmix insn
+  if testZ x
+  then branchBackward mmix insn
+  else incPC mmix
 -- }}}
 
 -- PBP {{{
 runPBP :: RunInsn
-runPBP mmix insn = do undefined
+runPBP mmix insn = do
+  x <- mmixGetGRX mmix insn
+  if testP x
+  then branchForward mmix insn
+  else incPC mmix
 -- }}}
 
 -- PBPB {{{
 runPBPB :: RunInsn
-runPBPB mmix insn = do undefined
+runPBPB mmix insn = do
+  x <- mmixGetGRX mmix insn
+  if testP x
+  then branchBackward mmix insn
+  else incPC mmix
 -- }}}
 
 -- PBOD {{{
 runPBOD :: RunInsn
-runPBOD mmix insn = do undefined
+runPBOD mmix insn = do
+  x <- mmixGetGRX mmix insn
+  if testODD x
+  then branchForward mmix insn
+  else incPC mmix
 -- }}}
 
 -- PBODB {{{
 runPBODB :: RunInsn
-runPBODB mmix insn = do undefined
+runPBODB mmix insn = do
+  x <- mmixGetGRX mmix insn
+  if testODD x
+  then branchBackward mmix insn
+  else incPC mmix
 -- }}}
 
 -- PBNN {{{
 runPBNN :: RunInsn
-runPBNN mmix insn = do undefined
+runPBNN mmix insn = do
+  x <- mmixGetGRX mmix insn
+  if testNN x
+  then branchForward mmix insn
+  else incPC mmix
 -- }}}
 
 -- PBNNB {{{
 runPBNNB :: RunInsn
-runPBNNB mmix insn = do undefined
+runPBNNB mmix insn = do
+  x <- mmixGetGRX mmix insn
+  if testNN x
+  then branchBackward mmix insn
+  else incPC mmix
 -- }}}
 
 -- PBNZ {{{
 runPBNZ :: RunInsn
-runPBNZ mmix insn = do undefined
+runPBNZ mmix insn = do
+  x <- mmixGetGRX mmix insn
+  if testNZ x
+  then branchForward mmix insn
+  else incPC mmix
 -- }}}
 
 -- PBNZB {{{
 runPBNZB :: RunInsn
-runPBNZB mmix insn = do undefined
+runPBNZB mmix insn = do
+  x <- mmixGetGRX mmix insn
+  if testNZ x
+  then branchBackward mmix insn
+  else incPC mmix
 -- }}}
 
 -- PBNP {{{
 runPBNP :: RunInsn
-runPBNP mmix insn = do undefined
+runPBNP mmix insn = do
+  x <- mmixGetGRX mmix insn
+  if testNP x
+  then branchForward mmix insn
+  else incPC mmix
 -- }}}
 
 -- PBNPB {{{
 runPBNPB :: RunInsn
-runPBNPB mmix insn = do undefined
+runPBNPB mmix insn = do
+  x <- mmixGetGRX mmix insn
+  if testNP x
+  then branchBackward mmix insn
+  else incPC mmix
 -- }}}
 
 -- PBEV {{{
 runPBEV :: RunInsn
-runPBEV mmix insn = do undefined
+runPBEV mmix insn = do
+  x <- mmixGetGRX mmix insn
+  if testEVEN x
+  then branchForward mmix insn
+  else incPC mmix
 -- }}}
 
 -- PBEVB {{{
 runPBEVB :: RunInsn
-runPBEVB mmix insn = do undefined
+runPBEVB mmix insn = do
+  x <- mmixGetGRX mmix insn
+  if testEVEN x
+  then branchBackward mmix insn
+  else incPC mmix
 -- }}}
 
 -- }}}
@@ -1714,130 +2029,276 @@ runZSEVI mmix insn = do
 
 -- }}}
 
+-- done
 -- 8* load {{{
 
 -- LDB {{{
 runLDB :: RunInsn
-runLDB mmix insn = do undefined
+runLDB mmix insn = do
+  (y,z) <- mmixGetGRYZ mmix insn
+  let vaddr = y + z
+  checkVAddrRead mmix vaddr
+  trapped <- checkTrapped mmix
+  unless trapped $ mmixVLdByte mmix insn vaddr
+  incPC mmix
 -- }}}
 
 -- LDBI {{{
 runLDBI :: RunInsn
-runLDBI mmix insn = do undefined
+runLDBI mmix insn = do
+  y <- mmixGetGRY mmix insn
+  let z = iGetZu insn
+  let vaddr = y + z
+  checkVAddrRead mmix vaddr
+  trapped <- checkTrapped mmix
+  unless trapped $ mmixVLdByte mmix insn vaddr
+  incPC mmix
 -- }}}
 
 -- LDBU {{{
 runLDBU :: RunInsn
-runLDBU mmix insn = do undefined
+runLDBU mmix insn = do
+  (y,z) <- mmixGetGRYZ mmix insn
+  let vaddr = y + z
+  checkVAddrRead mmix vaddr
+  trapped <- checkTrapped mmix
+  unless trapped $ mmixVLdByteu mmix insn vaddr
+  incPC mmix
 -- }}}
 
 -- LDBUI {{{
 runLDBUI :: RunInsn
-runLDBUI mmix insn = do undefined
+runLDBUI mmix insn = do
+  y <- mmixGetGRY mmix insn
+  let z = iGetZu insn
+  let vaddr = y + z
+  checkVAddrRead mmix vaddr
+  trapped <- checkTrapped mmix
+  unless trapped $ mmixVLdByteu mmix insn vaddr
+  incPC mmix
 -- }}}
 
 -- LDW {{{
 runLDW :: RunInsn
-runLDW mmix insn = do undefined
+runLDW mmix insn = do
+  (y,z) <- mmixGetGRYZ mmix insn
+  let vaddr = y + z
+  checkVAddrRead mmix vaddr
+  trapped <- checkTrapped mmix
+  unless trapped $ mmixVLdWyde mmix insn vaddr
+  incPC mmix
 -- }}}
 
 -- LDWI {{{
 runLDWI :: RunInsn
-runLDWI mmix insn = do undefined
+runLDWI mmix insn = do
+  y <- mmixGetGRY mmix insn
+  let z = iGetZu insn
+  let vaddr = y + z
+  checkVAddrRead mmix vaddr
+  trapped <- checkTrapped mmix
+  unless trapped $ mmixVLdWyde mmix insn vaddr
+  incPC mmix
 -- }}}
 
 -- LDWU {{{
 runLDWU :: RunInsn
-runLDWU mmix insn = do undefined
+runLDWU mmix insn = do
+  (y,z) <- mmixGetGRYZ mmix insn
+  let vaddr = y + z
+  checkVAddrRead mmix vaddr
+  trapped <- checkTrapped mmix
+  unless trapped $ mmixVLdWydeu mmix insn vaddr
+  incPC mmix
 -- }}}
 
 -- LDWUI {{{
 runLDWUI :: RunInsn
-runLDWUI mmix insn = do undefined
+runLDWUI mmix insn = do
+  y <- mmixGetGRY mmix insn
+  let z = iGetZu insn
+  let vaddr = y + z
+  checkVAddrRead mmix vaddr
+  trapped <- checkTrapped mmix
+  unless trapped $ mmixVLdWydeu mmix insn vaddr
+  incPC mmix
 -- }}}
 
 -- LDT {{{
 runLDT :: RunInsn
-runLDT mmix insn = do undefined
+runLDT mmix insn = do
+  (y,z) <- mmixGetGRYZ mmix insn
+  let vaddr = y + z
+  checkVAddrRead mmix vaddr
+  trapped <- checkTrapped mmix
+  unless trapped $ mmixVLdTetra mmix insn vaddr
+  incPC mmix
 -- }}}
 
 -- LDTI {{{
 runLDTI :: RunInsn
-runLDTI mmix insn = do undefined
+runLDTI mmix insn = do
+  y <- mmixGetGRY mmix insn
+  let z = iGetZu insn
+  let vaddr = y + z
+  checkVAddrRead mmix vaddr
+  trapped <- checkTrapped mmix
+  unless trapped $ mmixVLdTetra mmix insn vaddr
+  incPC mmix
 -- }}}
 
 -- LDTU {{{
 runLDTU :: RunInsn
-runLDTU mmix insn = do undefined
+runLDTU mmix insn = do
+  (y,z) <- mmixGetGRYZ mmix insn
+  let vaddr = y + z
+  checkVAddrRead mmix vaddr
+  trapped <- checkTrapped mmix
+  unless trapped $ mmixVLdTetrau mmix insn vaddr
+  incPC mmix
 -- }}}
 
 -- LDTUI {{{
 runLDTUI :: RunInsn
-runLDTUI mmix insn = do undefined
+runLDTUI mmix insn = do
+  y <- mmixGetGRY mmix insn
+  let z = iGetZu insn
+  let vaddr = y + z
+  checkVAddrRead mmix vaddr
+  trapped <- checkTrapped mmix
+  unless trapped $ mmixVLdTetrau mmix insn vaddr
+  incPC mmix
 -- }}}
 
 -- LDO {{{
 runLDO :: RunInsn
-runLDO mmix insn = do undefined
+runLDO mmix insn = do
+  (y,z) <- mmixGetGRYZ mmix insn
+  let vaddr = y + z
+  checkVAddrRead mmix vaddr
+  trapped <- checkTrapped mmix
+  unless trapped $ mmixVLdOcta mmix insn vaddr
+  incPC mmix
+
 -- }}}
 
 -- LDOI {{{
 runLDOI :: RunInsn
-runLDOI mmix insn = do undefined
+runLDOI mmix insn = do
+  y <- mmixGetGRY mmix insn
+  let z = iGetZu insn
+  let vaddr = y + z
+  checkVAddrRead mmix vaddr
+  trapped <- checkTrapped mmix
+  unless trapped $ mmixVLdOcta mmix insn vaddr
+  incPC mmix
 -- }}}
 
 -- LDOU {{{
 runLDOU :: RunInsn
-runLDOU mmix insn = do undefined
+runLDOU mmix insn = do
+  (y,z) <- mmixGetGRYZ mmix insn
+  let vaddr = y + z
+  checkVAddrRead mmix vaddr
+  trapped <- checkTrapped mmix
+  unless trapped $ mmixVLdOcta mmix insn vaddr
+  incPC mmix
 -- }}}
 
 -- LDOUI {{{
 runLDOUI :: RunInsn
-runLDOUI mmix insn = do undefined
+runLDOUI mmix insn = do
+  y <- mmixGetGRY mmix insn
+  let z = iGetZu insn
+  let vaddr = y + z
+  checkVAddrRead mmix vaddr
+  trapped <- checkTrapped mmix
+  unless trapped $ mmixVLdOcta mmix insn vaddr
+  incPC mmix
 -- }}}
 
 -- }}}
 
+-- 
 -- 9* system ?? {{{
 
--- LDSF {{{
+-- LDSF 'load short float' {{{
 runLDSF :: RunInsn
-runLDSF mmix insn = do undefined
+runLDSF mmix insn = do
+  (y,z) <- mmixGetGRYZ mmix insn
+  let vaddr = y + z
+  checkVAddrRead mmix vaddr
+  trapped <- checkTrapped mmix
+  unless trapped $ mmixVLdSF mmix insn vaddr
+  incPC mmix
 -- }}}
 
--- LDSFI {{{
+-- LDSFI 'load short float immediate' {{{
 runLDSFI :: RunInsn
-runLDSFI mmix insn = do undefined
+runLDSFI mmix insn = do
+  y <- mmixGetGRY mmix insn
+  let z = iGetZu insn
+  let vaddr = y + z
+  checkVAddrRead mmix vaddr
+  trapped <- checkTrapped mmix
+  unless trapped $ mmixVLdSF mmix insn vaddr
+  incPC mmix
 -- }}}
 
--- LDHT {{{
+-- LDHT 'load high tetra' {{{
 runLDHT :: RunInsn
-runLDHT mmix insn = do undefined
+runLDHT mmix insn = do
+  (y,z) <- mmixGetGRYZ mmix insn
+  let vaddr = y + z
+  checkVAddrRead mmix vaddr
+  trapped <- checkTrapped mmix
+  unless trapped $ mmixVLdHighTetra mmix insn vaddr
+  incPC mmix
 -- }}}
 
--- LDHTI {{{
+-- LDHTI 'load high tetra immediate' {{{
 runLDHTI :: RunInsn
-runLDHTI mmix insn = do undefined
+runLDHTI mmix insn = do
+  y <- mmixGetGRY mmix insn
+  let z = iGetZu insn
+  let vaddr = y + z
+  checkVAddrRead mmix vaddr
+  trapped <- checkTrapped mmix
+  unless trapped $ mmixVLdHighTetra mmix insn vaddr
+  incPC mmix
 -- }}}
 
 -- CSWAP {{{
 runCSWAP :: RunInsn
-runCSWAP mmix insn = do undefined
+runCSWAP mmix insn = do
+  (y,z) <- mmixGetGRYZ mmix insn
+  let vaddr = y + z
+  checkVAddrRead mmix vaddr
+  trapped <- checkTrapped mmix
+  unless trapped $ mmixCSwap mmix insn vaddr
+  incPC mmix
 -- }}}
 
 -- CSWAPI {{{
 runCSWAPI :: RunInsn
-runCSWAPI mmix insn = do undefined
+runCSWAPI mmix insn = do
+  y <- mmixGetGRY mmix insn
+  let z = iGetZu insn
+  let vaddr = y + z
+  checkVAddrRead mmix vaddr
+  trapped <- checkTrapped mmix
+  unless trapped $ mmixCSwap mmix insn vaddr
+  incPC mmix
 -- }}}
 
 -- LDUNC {{{
 runLDUNC :: RunInsn
-runLDUNC mmix insn = do undefined
+runLDUNC mmix insn = do
 -- }}}
 
 -- LDUNCI {{{
 runLDUNCI :: RunInsn
-runLDUNCI mmix insn = do undefined
+runLDUNCI mmix insn = do
 -- }}}
 
 -- LDVTS {{{
@@ -1882,90 +2343,196 @@ runGOI mmix insn = do undefined
 
 -- }}}
 
+-- done
 -- a* store {{{
 
 -- STB {{{
 runSTB :: RunInsn
-runSTB mmix insn = do undefined
+runSTB mmix insn = do
+  (x,y,z) <- mmixGetGRXYZ mmix insn
+  let vaddr = y + z
+  checkVAddrWrite mmix vaddr
+  trapped <- checkTrapped mmix
+  unless trapped $ mmixVStByte mmix vaddr x
+  incPC mmix
 -- }}}
 
 -- STBI {{{
 runSTBI :: RunInsn
-runSTBI mmix insn = do undefined
+runSTBI mmix insn = do
+  (x,y) <- mmixGetGRXY mmix insn
+  let z = iGetZu insn
+  let vaddr = y + z
+  checkVAddrWrite mmix vaddr
+  trapped <- checkTrapped mmix
+  unless trapped $ mmixVStByte mmix vaddr x
+  incPC mmix
 -- }}}
 
 -- STBU {{{
 runSTBU :: RunInsn
-runSTBU mmix insn = do undefined
+runSTBU mmix insn = do
+  (x,y,z) <- mmixGetGRXYZ mmix insn
+  let vaddr = y + z
+  checkVAddrWrite mmix vaddr
+  trapped <- checkTrapped mmix
+  unless trapped $ mmixVStByteu mmix vaddr x
+  incPC mmix
 -- }}}
 
 -- STBUI {{{
 runSTBUI :: RunInsn
-runSTBUI mmix insn = do undefined
+runSTBUI mmix insn = do
+  (x,y) <- mmixGetGRXY mmix insn
+  let z = iGetZu insn
+  let vaddr = y + z
+  checkVAddrWrite mmix vaddr
+  trapped <- checkTrapped mmix
+  unless trapped $ mmixVStByteu mmix vaddr x
+  incPC mmix
 -- }}}
 
 -- STW {{{
 runSTW :: RunInsn
-runSTW mmix insn = do undefined
+runSTW mmix insn = do
+  (x,y,z) <- mmixGetGRXYZ mmix insn
+  let vaddr = y + z
+  checkVAddrWrite mmix vaddr
+  trapped <- checkTrapped mmix
+  unless trapped $ mmixVStWyde mmix vaddr x
+  incPC mmix
 -- }}}
 
 -- STWI {{{
 runSTWI :: RunInsn
-runSTWI mmix insn = do undefined
+runSTWI mmix insn = do
+  (x,y) <- mmixGetGRXY mmix insn
+  let z = iGetZu insn
+  let vaddr = y + z
+  checkVAddrWrite mmix vaddr
+  trapped <- checkTrapped mmix
+  unless trapped $ mmixVStWyde mmix vaddr x
+  incPC mmix
 -- }}}
 
 -- STWU {{{
 runSTWU :: RunInsn
-runSTWU mmix insn = do undefined
+runSTWU mmix insn = do
+  (x,y,z) <- mmixGetGRXYZ mmix insn
+  let vaddr = y + z
+  checkVAddrWrite mmix vaddr
+  trapped <- checkTrapped mmix
+  unless trapped $ mmixVStWydeu mmix vaddr x
+  incPC mmix
 -- }}}
 
 -- STWUI {{{
 runSTWUI :: RunInsn
-runSTWUI mmix insn = do undefined
+runSTWUI mmix insn = do
+  (x,y) <- mmixGetGRXY mmix insn
+  let z = iGetZu insn
+  let vaddr = y + z
+  checkVAddrWrite mmix vaddr
+  trapped <- checkTrapped mmix
+  unless trapped $ mmixVStWydeu mmix vaddr x
+  incPC mmix
 -- }}}
 
 -- STT {{{
 runSTT :: RunInsn
-runSTT mmix insn = do undefined
+runSTT mmix insn = do
+  (x,y,z) <- mmixGetGRXYZ mmix insn
+  let vaddr = y + z
+  checkVAddrWrite mmix vaddr
+  trapped <- checkTrapped mmix
+  unless trapped $ mmixVStTetra mmix vaddr x
+  incPC mmix
 -- }}}
 
 -- STTI {{{
 runSTTI :: RunInsn
-runSTTI mmix insn = do undefined
+runSTTI mmix insn = do
+  (x,y) <- mmixGetGRXY mmix insn
+  let z = iGetZu insn
+  let vaddr = y + z
+  checkVAddrWrite mmix vaddr
+  trapped <- checkTrapped mmix
+  unless trapped $ mmixVStTetra mmix vaddr x
+  incPC mmix
 -- }}}
 
 -- STTU {{{
 runSTTU :: RunInsn
-runSTTU mmix insn = do undefined
+runSTTU mmix insn = do
+  (x,y,z) <- mmixGetGRXYZ mmix insn
+  let vaddr = y + z
+  checkVAddrWrite mmix vaddr
+  trapped <- checkTrapped mmix
+  unless trapped $ mmixVStTetrau mmix vaddr x
+  incPC mmix
 -- }}}
 
 -- STTUI {{{
 runSTTUI :: RunInsn
-runSTTUI mmix insn = do undefined
+runSTTUI mmix insn = do
+  (x,y) <- mmixGetGRXY mmix insn
+  let z = iGetZu insn
+  let vaddr = y + z
+  checkVAddrWrite mmix vaddr
+  trapped <- checkTrapped mmix
+  unless trapped $ mmixVStTetrau mmix vaddr x
+  incPC mmix
 -- }}}
 
 -- STO {{{
 runSTO :: RunInsn
-runSTO mmix insn = do undefined
+runSTO mmix insn = do
+  (x,y,z) <- mmixGetGRXYZ mmix insn
+  let vaddr = y + z
+  checkVAddrWrite mmix vaddr
+  trapped <- checkTrapped mmix
+  unless trapped $ mmixVStOcta mmix vaddr x
+  incPC mmix
 -- }}}
 
 -- STOI {{{
 runSTOI :: RunInsn
-runSTOI mmix insn = do undefined
+runSTOI mmix insn = do
+  (x,y) <- mmixGetGRXY mmix insn
+  let z = iGetZu insn
+  let vaddr = y + z
+  checkVAddrWrite mmix vaddr
+  trapped <- checkTrapped mmix
+  unless trapped $ mmixVStOcta mmix vaddr x
+  incPC mmix
 -- }}}
 
 -- STOU {{{
 runSTOU :: RunInsn
-runSTOU mmix insn = do undefined
+runSTOU mmix insn = do
+  (x,y,z) <- mmixGetGRXYZ mmix insn
+  let vaddr = y + z
+  checkVAddrWrite mmix vaddr
+  trapped <- checkTrapped mmix
+  unless trapped $ mmixVStOcta mmix vaddr x
+  incPC mmix
 -- }}}
 
 -- STOUI {{{
 runSTOUI :: RunInsn
-runSTOUI mmix insn = do undefined
+runSTOUI mmix insn = do
+  (x,y) <- mmixGetGRXY mmix insn
+  let z = iGetZu insn
+  let vaddr = y + z
+  checkVAddrWrite mmix vaddr
+  trapped <- checkTrapped mmix
+  unless trapped $ mmixVStOcta mmix vaddr x
+  incPC mmix
 -- }}}
 
 -- }}}
 
+-- TODO
 -- b* system ? {{{
 
 -- STSF {{{
@@ -2492,6 +3059,7 @@ runANDNL mmix insn = do
 
 -- }}}
 
+-- TODO
 -- f* {{{
 
 -- JMP {{{

@@ -384,7 +384,9 @@ bool xor;
     if (o.l & 0xff) {
       a = ((z.h >> k) & 0x01010101) * 0xff;
       b = ((z.l >> k) & 0x01010101) * 0xff;
+      // ab = 0b:0000000x0000000y.. * 0xff -> 0b:xxxxxxxxyyyyyyyy..
       c = (o.l & 0xff) * 0x01010101;
+      // c = 0b:abcdefgh -> abcdefghabcdefgh..
       if (xor)
         x.h ^= a & c, x.l ^= b & c;
       else
