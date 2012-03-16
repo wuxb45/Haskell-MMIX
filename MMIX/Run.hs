@@ -1,4 +1,5 @@
 -- Copyright 2012 Wu Xingbo <wuxb45@gmail.com>
+-- vim: fdm=marker
 
 -- module exports {{{
 module MMIX.Run (
@@ -393,35 +394,46 @@ tripClearABit mmix trip = do
   mmixSetSR mmix rAIx $ rA .&. (complement $ tripAEBit trip)
 -- }}}
 
--- issueATrip: (set
+-- issueTrip: (set hidden SR: rTRIP) {{{
+issueTrip :: MMIX -> IO ()
+issueTrip = mmixSetSR mmix rTRIPIx 1
+-- }}}
 
--- issueTrip: (set rA's event bit) {{{
-issueTrip :: MMIX -> TRIP -> IO ()
-issueTrip = tripSetABit
+-- issueTrap: (set hidden SR: rTRAP) {{{
+issueTrap :: MMIX -> IO ()
+issueTrap = mmixSetSR mmix rTRAPIx 1
 -- }}}
 
 -- issueATrip: issue ArithEx Trip {{{
 issueATrip :: MMIX -> ArithEx -> IO ()
-issueATrip mmix ex = issueTrip mmix $ cvAEtoT ex
+issueATrip mmix ex = tripSetABit mmix $ cvAEtoT ex
 -- }}}
 
-
 -- issueDTrap*: dynamic trap happened (set rQ bit) {{{
-
 issueDTrap :: BitIx -> MMIX -> IO ()
 issueDTrap ix mmix = do
   rQ <- mmixGetSR mmix rQIx
   mmixSetSR mmix rQIx $ bitSet1 ix rQ
+  -- also keep them in shadow register rQQ
+  rQQ <- mmixGetSR mmix rQQIx
+  mmixSetSR mmix rQQIx $ bitSet1 ix rQQ
+-- }}}
 
+-- issueDTrapP* {{{
+
+-- read permission
 issueDTrapPr :: MMIX -> IO ()
 issueDTrapPr = issueDTrap rQBr
 
+-- write permission
 issueDTrapPw :: MMIX -> IO ()
 issueDTrapPw = issueDTrap rQBw
 
+-- execute permission
 issueDTrapPx :: MMIX -> IO ()
 issueDTrapPx = issueDTrap rQBx
 
+-- refers to a negative virtual address
 issueDTrapPn :: MMIX -> IO ()
 issueDTrapPn = issueDTrap rQBn
 
@@ -429,13 +441,19 @@ issueDTrapPn = issueDTrap rQBn
 issueDTrapPk :: MMIX -> IO ()
 issueDTrapPk = issueDTrap rQBk
 
--- breaks the rule
+-- breaks the rule (illegal insn)
 issueDTrapPb :: MMIX -> IO ()
 issueDTrapPb = issueDTrap rQBb
 
+-- insn violates security
 issueDTrapPs :: MMIX -> IO ()
-issueDTrapPs = issueDTrap rQBs
+issueDTrapPs = do
+  -- SPECIAL CASE: set S bit of rK to 1
+  rK <- mmixGetSR mmix rKIx
+  mmixSetSR mmix rKIx $ bitSet1 rKBs rK
+  issueDTrap rQBs
 
+-- insn comes from a privileged virtual address
 issueDTrapPp :: MMIX -> IO ()
 issueDTrapPp = issueDTrap rQBp
 
@@ -546,16 +564,6 @@ checkPx pte = 1 == bitGet pteBpx pte
 checkPn :: VAddr -> Bool
 checkPn vaddr = 1 == bitGet 63 vaddr
 
--- check privileged instruction
--- TODO: big impl
-checkPk :: Insn -> Bool
-checkPk insn = True
-
--- check instruction rules
--- TODO: big impl
-checkPb :: Insn -> Bool
-checkPb insn = True
-
 -- check security
 -- neg-addr or rK(prog) == 0xff => security OK
 -- param: addr(i) and rK
@@ -605,7 +613,7 @@ runDoCheckp mmix = do
   unless pOK $ issueDTrapPp mmix
 -- }}}
 
--- check vaddr can execute and issue Trap (x) (neg-addr -> True) {{{
+-- check VAddr can execute and issue Trap (x) (neg-addr -> True) {{{
 checkVAddrExecute :: MMIX -> VAddr -> IO Bool
 checkVAddrExecute mmix vaddr = do
   if isVirtual vaddr
@@ -644,12 +652,13 @@ checkVAddrWrite mmix vaddr = do
 
 -- runMMIX and sub-routines {{{
 
--- run mmix
+-- run mmix {{{
 runMMIX :: MMIX -> IO ()
 runMMIX mmix = do
   checkPCPosition mmix -- check s/p
   trapped <- checkTrapped mmix
   unless trapped $ runFetchExec mmix
+-- }}}
 
 -- runFetchExec: check x and run {{{
 
@@ -680,35 +689,209 @@ runPAddr mmix paddr = do
     Nothing -> trace "fuck me! shit!" $ return ()
 -- }}}
 
--- branch helper {{{
-branchForward :: MMIX -> Insn -> IO ()
-branchForward mmix insn = do
+-- branch helper (use YZ) {{{
+runBranchForward :: MMIX -> Insn -> IO ()
+runBranchForward mmix insn = do
   pc <- mmixGetPC mmix
   let npc = pc + (iGetYZu insn `shiftL` 2)
   mmixSetPC mmix npc
 
-branchBackward :: MMIX -> Insn -> IO ()
-branchBackward mmix insn = do
+runBranchBackward :: MMIX -> Insn -> IO ()
+runBranchBackward mmix insn = do
   pc <- mmixGetPC mmix
   let npc = pc + (iGetYZu insn `shiftL` 2) - 0x40000
   mmixSetPC mmix npc
 -- }}}
 
-runInsn :: MMIX -> Insn -> IO ()
-runInsn mmix insn = undefined --TODO: call runXXXinsn
+-- jump helper (use XYZ) {{{
+runJumpForward :: MMIX -> Insn -> IO ()
+runJumpForward mmix insn = do
+  pc <- mmixGetPC mmix
+  let npc = pc + (iGetXYZu insn `shiftL` 2)
+  mmixSetPC mmix npc
+
+runJumpBackward :: MMIX -> Insn -> IO ()
+runJumpBackward mmix insn = do
+  pc <- mmixGetPC mmix
+  let npc = pc + (iGetXYZu insn `shiftL` 2) - 0x4000000
+  mmixSetPC mmix npc
+-- }}}
+
+-- push-jump helper (return address) {{{
+runPJumpForward :: MMIX -> Insn -> IO ()
+runPJumpForward mmix insn = do
+  pc <- mmixGetPC mmix
+  let ret = pc + 4
+  mmixSetSR mmix rJIx
+  runBranchForward mmix insn
+
+runPJumpBackward :: MMIX -> Insn -> IO ()
+runPJumpBackward mmix insn = do
+  pc <- mmixGetPC mmix
+  let ret = pc + 4
+  mmixSetSR mmix rJIx
+  runBranchBackward mmix insn
+-- }}}
+
+-- push-go helper (return address) {{{
+runPGo :: MMIX -> VAddr -> IO ()
+runPGo mmix vaddr = do
+  pc <- mmixGetPC mmix
+  let ret = pc + 4
+  mmixSetSR mmix rJIx
+  mmixSetPC mmix vaddr
+-- }}}
+
+-- putSR: put to sepcial register {{{
+putSR :: MMIX -> SRIx -> Octa -> IO ()
+putSR mmix ix v
+  | ix == rAIx = putSRrA mmix v
+  | ix == rLIx = putSRrL mmix v
+  | ix == rGIx = putSRrG mmix v
+  | ix == rQIx = putSRrQ mmix v
+  | ix `elem` rNoChange = putSRNoChange mmix ix v
+  | ix `elem` rPrivilege = putSRPrivilege mmix ix v
+  | otherwise = mmixSetSR mmix ix v
+  -- | ix == rAIx && 
+  where
+    rNoChange  = [rNIx,rOIx,rSIx]
+    rPrivilege = [rCIx,rIIx,rKIx,rQIx,rTIx,rUIx,rVIx,rTTIx]
+
+putSRrA :: MMIX -> Octa -> IO ()
+putSRrA mmix v = 
+  if fldGet rAFZero v /= 0
+  then issueDTrapPb mmix
+  else mmixSetSR mmix rAIx v
+
+putSRrL :: MMIX -> Octa -> IO ()
+putSRrL mmix v =
+  if fldGet rLFZero v /= 0
+  then issueDTrapPb mmix
+  else do
+    rL <- mmixGetSR mmix rLIx
+    when (v < rL) mmixSetSR mmix rLIx v
+
+putSRrG :: MMIX -> Octa -> IO ()
+putSRrG mmix v =
+  if fldGet rGFZero v /= 0
+  then issueDTrapPb mmix
+  else do
+    rL <- mmixGetSR mmix rLIx
+    if v < rL -- rG >= rL
+    then issueDTrapPb mmix
+    else mmixSetSR mmix rGIx v
+
+putSRNoChange :: MMIX -> SRIx -> Octa -> IO ()
+putSRNoChange mmix ix v = do
+  -- XXX: or we always issue b ?
+  orig <- mmixGetSR mmix ix
+  when (orig /= v) issueDTrapPb
+
+
+putSRPrivilege :: MMIX -> SRIx -> Octa -> IO ()
+putSRPrivilege mmix ix v = do
+  rK <- mmixGetSR mmix rKIx
+  if bitGet rKBk rK == 0
+  then mmixSetSR mmix ix v
+  else issueDTrapPb
+
+putSRrQ :: MMIX -> Octa -> IO ()
+putSRrQ mmix v = do
+  rQQ <- mmixGetSR mmix rQQIx
+  --mmixSetSR mmix rQQIx 0  -- XXX: need to clear rQQ ?
+  putSRPrivilege mmix ix $ rQQ .|. v 
+-- }}}
+
+-- TODO: rewrite Pop/Push with new GRD
+-- pop (for POP) {{{
+runPopGR :: MMIX -> GRIx -> IO ()
+runPopGR mmix n = do
+  l <- cast <$> mmixGetSR mmix rLIx
+  g <- cast <$> mmixGetSR mmix rGIx
+  rS <- mmixGetSR mmix rSIx
+  rO <- mmixGetSR mmix rOIx
+  when (rS /= rO) $ error "We don't have stack buffer !"
+  x <- cast <$> mmixLdOcta0 mmix (rO - 8)
+  trapped <- checkTrapped mmix
+  unless trapped $ do
+    let n' = if n > l then l + 1 else n
+    hole <- if 0 < n' && n' <= l
+      then mmixGetGR mmix (n' - 1)
+      else return 0
+    let l' = min (x + n') g
+    runCopyMultiGR mmix $ reverse $ zip [0 ..] [x + 1 .. l' - 1]
+    mmixSetGR mmix x hole
+    runLoadMultiGR mmix $ zip [rO - 16, rO - 24 ..] [x - 1 .. 0]
+  
+runLoadMultiGR :: MMIX -> [(VAddr, GRIx)] -> IO ()
+runLoadMultiGR mmix ((vaddr,ix):rest) = do
+  checkVAddrRead mmix vaddr
+  trapped <- checkTrapped mmix
+  unless trapped $ do
+    r <- mmixVLdOcta mmix vaddr
+    mmixSetGR mmix ix r
+    runLoadMultiGR mmix rest
+-- }}}
+
+-- push (for PUSHGO/PUSHJ) {{{
+
+runPushGR :: MMIX -> GRIx -> IO ()
+runPushGR mmix ix = do
+  l <- cast <$> mmixGetSR mmix rLIx
+  g <- cast <$> mmixGetSR mmix rGIx
+  if ix >= g
+  then runPushGR mmix l
+  else runPushRaw mmix ix
+
+runPushRaw :: MMIX -> GRIx -> IO ()
+runPushRaw mmix n = do
+  rS <- mmixGetSR mmix rSIx
+  rO <- mmixGetSR mmix rOIx
+  rL <- mmixGetSR mmix rLIx
+  let l = cast rL :: GRIx
+  when (rS /= rO) $ error "We don't have stack buffer !"
+  mmixSetGR mmix n $ cast n  -- set $n = n (count)
+  runStoreMultiGR mmix $ zip [0 .. n] [rO, rO + 8 ..]
+  trapped <- checkTrapped mmix
+  unless trapped $ do
+    runCopyMultiGR mmix $ zip [(n + 1) .. (l - 1)] [0 ..]
+    mmixSetSR mmix rLIx (rL - n - 1)
+    mmixSetSR mmix rSIx (rS + ((n + 1) * 8))
+    mmixSetSR mmix rOIx (rO + ((n + 1) * 8))
+
+-- store: (from-gr, to-address)
+runStoreMultiGR :: MMIX -> [(GRIx, VAddr)] -> IO ()
+runStoreMultiGR mmix ((ix,vaddr):rest) = do
+  r <- mmixGetGR mmix ix
+  checkVAddrWrite mmix vaddr
+  trapped <- checkTrapped mmix
+  unless trapped $ do
+    mmixVStOcta mmix vaddr r
+    runStoreMultiGR mmix rest
+
+runCopyMultiGR :: MMIX -> [(GRIx, GRIx)] -> IO ()
+runCopyMultiGR mmix ((from,to):rest) = do
+  mmixCopyGR mmix from to
+  runShiftMultiGR mmix rest
 
 -- }}}
 
--- helpers for runXXInsn {{{
+-- resume {{{
+runResume :: MMIX -> Z -> IO ()
+runResume mmix 1 = do
+  --TODO
+-- }}}
 
--- normal PC routines {{{
-
--- pc = pc + 4
+-- incPC: pc = pc + 4 {{{
 incPC :: MMIX -> IO ()
 incPC mmix = do
   pc <- mmixGetPC mmix
   mmixSetPC mmix (pc + 4)
+-- }}}
 
+-- runInsn {{{
+runInsn :: MMIX -> Insn -> IO ()
+runInsn mmix insn = undefined --TODO: call runXXXinsn
 -- }}}
 
 -- }}}
@@ -717,14 +900,15 @@ incPC mmix = do
 
 type RunInsn = MMIX -> Insn -> IO ()
 
--- done
 -- 0* trap, floating +-/convert {{{
 
 -- TRAP 'trap' {{{
 runTRAP :: RunInsn
 runTRAP mmix insn = do
-  npc <- (+ 4) <$> mmixGetPC mmix
-  doFTrap mmix insn npc
+  issueTrap mmix
+  incPC mmix
+  -- npc <- (+ 4) <$> mmixGetPC mmix
+  -- doFTrap mmix insn npc
 -- }}}
 
 -- FCMP 'floating compare' {{{
@@ -769,14 +953,17 @@ runFADD mmix insn = do
 -- FIX 'convert floating to fixed' {{{
 runFIX :: RunInsn
 runFIX mmix insn = do
-  rdm0 <- toRoundModeRaw <$> mmixGetSR mmix rAIx
   let y = iGetYu insn
-  let rdm = fromMaybe rdm0 $ toRoundModeImm y
-  z <- mmixGetGRFZ mmix insn
-  let re = fpFix rdm z
-  mapM (issueATrip mmix) $ arithGetEx re
-  mmixSetGRX mmix insn $ arithGetRx re
-  incPC mmix
+  if y > 4
+  then issueDTrapPb mmix
+  else do
+    rdm0 <- toRoundModeRaw <$> mmixGetSR mmix rAIx
+    let rdm = fromMaybe rdm0 $ toRoundModeImm y
+    z <- mmixGetGRFZ mmix insn
+    let re = fpFix rdm z
+    mapM (issueATrip mmix) $ arithGetEx re
+    mmixSetGRX mmix insn $ arithGetRx re
+    incPC mmix
 -- }}}
   
 -- FSUB 'floating subtract' {{{
@@ -793,123 +980,149 @@ runFSUB mmix insn = do
 -- FIXU 'convert floating to fixed unsigned' {{{
 runFIXU :: RunInsn
 runFIXU mmix insn = do
-  rdm0 <- toRoundModeRaw <$> mmixGetSR mmix rAIx
   let y = iGetYu insn
-  let rdm = fromMaybe rdm0 $ toRoundModeImm y
-  z <- mmixGetGRFZ mmix insn
-  let re = fpFixu rdm z
-  mapM (issueATrip mmix) $ arithGetEx re
-  mmixSetGRX mmix insn $ arithGetRx re
-  incPC mmix
+  if y > 4
+  then issueDTrapPb mmix
+  else do
+    rdm0 <- toRoundModeRaw <$> mmixGetSR mmix rAIx
+    let rdm = fromMaybe rdm0 $ toRoundModeImm y
+    z <- mmixGetGRFZ mmix insn
+    let re = fpFixu rdm z
+    mapM (issueATrip mmix) $ arithGetEx re
+    mmixSetGRX mmix insn $ arithGetRx re
+    incPC mmix
 -- }}}
 
 -- FLOT 'convert fixed to floating' {{{
 runFLOT :: RunInsn
 runFLOT mmix insn = do
-  rdm0 <- toRoundModeRaw <$> mmixGetSR mmix rAIx
   let y = iGetYu insn
-  let rdm = fromMaybe rdm0 $ toRoundModeImm y
-  z <- mmixGetGRZ mmix insn
-  let re = fpFloat rdm z
-  mapM (issueATrip mmix) $ arithGetEx re
-  mmixSetGRFX mmix insn $ arithGetRx re
-  incPC mmix
+  if y > 4
+  then issueDTrapPb mmix
+  else do
+    rdm0 <- toRoundModeRaw <$> mmixGetSR mmix rAIx
+    let rdm = fromMaybe rdm0 $ toRoundModeImm y
+    z <- mmixGetGRZ mmix insn
+    let re = fpFloat rdm z
+    mapM (issueATrip mmix) $ arithGetEx re
+    mmixSetGRFX mmix insn $ arithGetRx re
+    incPC mmix
 -- }}}
 
 -- FLOTI 'convert fixed to floating immediate' {{{
 runFLOTI :: RunInsn
 runFLOTI mmix insn = do
-  rdm0 <- toRoundModeRaw <$> mmixGetSR mmix rAIx
   let y = iGetYu insn
-  let rdm = fromMaybe rdm0 $ toRoundModeImm y
-  let z = iGetZs insn
-  let re = fpFloat rdm z
-  mapM (issueATrip mmix) $ arithGetEx re
-  mmixSetGRFX mmix insn $ arithGetRx re
-  incPC mmix
+  if y > 4
+  then issueDTrapPb mmix
+  else do
+    rdm0 <- toRoundModeRaw <$> mmixGetSR mmix rAIx
+    let rdm = fromMaybe rdm0 $ toRoundModeImm y
+    let z = iGetZs insn
+    let re = fpFloat rdm z
+    mapM (issueATrip mmix) $ arithGetEx re
+    mmixSetGRFX mmix insn $ arithGetRx re
+    incPC mmix
 -- }}}
 
 -- FLOTU 'convert fixed to floating unsigned' {{{
 runFLOTU :: RunInsn
 runFLOTU mmix insn = do
-  rdm0 <- toRoundModeRaw <$> mmixGetSR mmix rAIx
   let y = iGetYu insn
-  let rdm = fromMaybe rdm0 $ toRoundModeImm y
-  z <- mmixGetGRZ mmix insn
-  let re = fpFloatu rdm z
-  mapM (issueATrip mmix) $ arithGetEx re
-  mmixSetGRFX mmix insn $ arithGetRx re
-  incPC mmix
+  if y > 4
+  then issueDTrapPb mmix
+  else do
+    rdm0 <- toRoundModeRaw <$> mmixGetSR mmix rAIx
+    let rdm = fromMaybe rdm0 $ toRoundModeImm y
+    z <- mmixGetGRZ mmix insn
+    let re = fpFloatu rdm z
+    mapM (issueATrip mmix) $ arithGetEx re
+    mmixSetGRFX mmix insn $ arithGetRx re
+    incPC mmix
 -- }}}
 
 -- FLOTUI 'convert fixed to floating unsigned immediate' {{{
 runFLOTUI :: RunInsn
 runFLOTUI mmix insn = do
-  rdm0 <- toRoundModeRaw <$> mmixGetSR mmix rAIx
   let y = iGetYu insn
-  let rdm = fromMaybe rdm0 $ toRoundModeImm y
-  let z = iGetZu insn
-  let re = fpFloatu rdm z
-  mapM (issueATrip mmix) $ arithGetEx re
-  mmixSetGRFX mmix insn $ arithGetRx re
-  incPC mmix
+  if y > 4
+  then issueDTrapPb mmix
+  else do
+    rdm0 <- toRoundModeRaw <$> mmixGetSR mmix rAIx
+    let rdm = fromMaybe rdm0 $ toRoundModeImm y
+    let z = iGetZu insn
+    let re = fpFloatu rdm z
+    mapM (issueATrip mmix) $ arithGetEx re
+    mmixSetGRFX mmix insn $ arithGetRx re
+    incPC mmix
 -- }}}
 
 -- SFLOT 'convert fixed to short float' {{{
 runSFLOT :: RunInsn
 runSFLOT mmix insn = do
-  rdm0 <- toRoundModeRaw <$> mmixGetSR mmix rAIx
   let y = iGetYu insn
-  let rdm = fromMaybe rdm0 $ toRoundModeImm y
-  z <- mmixGetGRZ mmix insn
-  let re = fpSFloat rdm z
-  mapM (issueATrip mmix) $ arithGetEx re
-  mmixSetGRFX mmix insn $ arithGetRx re
-  incPC mmix
+  if y > 4
+  then issueDTrapPb mmix
+  else do
+    rdm0 <- toRoundModeRaw <$> mmixGetSR mmix rAIx
+    let rdm = fromMaybe rdm0 $ toRoundModeImm y
+    z <- mmixGetGRZ mmix insn
+    let re = fpSFloat rdm z
+    mapM (issueATrip mmix) $ arithGetEx re
+    mmixSetGRFX mmix insn $ arithGetRx re
+    incPC mmix
 -- }}}
 
 -- SFLOTI 'convert fixed to short float immediate' {{{
 runSFLOTI :: RunInsn
 runSFLOTI mmix insn = do
-  rdm0 <- toRoundModeRaw <$> mmixGetSR mmix rAIx
   let y = iGetYu insn
-  let rdm = fromMaybe rdm0 $ toRoundModeImm y
-  let z = iGetZs insn
-  let re = fpSFloat rdm z
-  mapM (issueATrip mmix) $ arithGetEx re
-  mmixSetGRFX mmix insn $ arithGetRx re
-  incPC mmix
+  if y > 4
+  then issueDTrapPb mmix
+  else do
+    rdm0 <- toRoundModeRaw <$> mmixGetSR mmix rAIx
+    let rdm = fromMaybe rdm0 $ toRoundModeImm y
+    let z = iGetZs insn
+    let re = fpSFloat rdm z
+    mapM (issueATrip mmix) $ arithGetEx re
+    mmixSetGRFX mmix insn $ arithGetRx re
+    incPC mmix
 -- }}}
 
 -- SFLOTU 'convert fixed to short float unsigned ' {{{
 runSFLOTU :: RunInsn
 runSFLOTU mmix insn = do
-  rdm0 <- toRoundModeRaw <$> mmixGetSR mmix rAIx
   let y = iGetYu insn
-  let rdm = fromMaybe rdm0 $ toRoundModeImm y
-  z <- mmixGetGRZ mmix insn
-  let re = fpSFloatu rdm z
-  mapM (issueATrip mmix) $ arithGetEx re
-  mmixSetGRFX mmix insn $ arithGetRx re
-  incPC mmix
+  if y > 4
+  then issueDTrapPb mmix
+  else do
+    rdm0 <- toRoundModeRaw <$> mmixGetSR mmix rAIx
+    let rdm = fromMaybe rdm0 $ toRoundModeImm y
+    z <- mmixGetGRZ mmix insn
+    let re = fpSFloatu rdm z
+    mapM (issueATrip mmix) $ arithGetEx re
+    mmixSetGRFX mmix insn $ arithGetRx re
+    incPC mmix
 -- }}}
 
 -- SFLOTUI 'convert fixed to short float unsigned immediate' {{{
 runSFLOTUI :: RunInsn
 runSFLOTUI mmix insn = do
-  rdm0 <- toRoundModeRaw <$> mmixGetSR mmix rAIx
   let y = iGetYu insn
-  let rdm = fromMaybe rdm0 $ toRoundModeImm y
-  let z = iGetZu insn
-  let re = fpSFloatu rdm z
-  mapM (issueATrip mmix) $ arithGetEx re
-  mmixSetGRFX mmix insn $ arithGetRx re
-  incPC mmix
+  if y > 4
+  then issueDTrapPb mmix
+  else do
+    rdm0 <- toRoundModeRaw <$> mmixGetSR mmix rAIx
+    let rdm = fromMaybe rdm0 $ toRoundModeImm y
+    let z = iGetZu insn
+    let re = fpSFloatu rdm z
+    mapM (issueATrip mmix) $ arithGetEx re
+    mmixSetGRFX mmix insn $ arithGetRx re
+    incPC mmix
 -- }}}
 
 -- }}}
 
--- done
 -- 1* floating, integer mul/div {{{
 
 -- FMUL 'floating multiply' {{{
@@ -970,14 +1183,17 @@ runFDIV mmix insn = do
 -- FSQRT 'floating square root' {{{
 runFSQRT :: RunInsn
 runFSQRT mmix insn = do
-  rdm0 <- toRoundModeRaw <$> mmixGetSR mmix rAIx
   let y = iGetYu insn
-  let rdm = fromMaybe rdm0 $ toRoundModeImm y
-  z <- mmixGetGRFZ mmix insn
-  let re = fpSqrt rdm z
-  mapM (issueATrip mmix) $ arithGetEx re
-  mmixSetGRFX mmix insn $ arithGetRx re
-  incPC mmix
+  if y > 4
+  then issueDTrapPb mmix
+  else do
+    rdm0 <- toRoundModeRaw <$> mmixGetSR mmix rAIx
+    let rdm = fromMaybe rdm0 $ toRoundModeImm y
+    z <- mmixGetGRFZ mmix insn
+    let re = fpSqrt rdm z
+    mapM (issueATrip mmix) $ arithGetEx re
+    mmixSetGRFX mmix insn $ arithGetRx re
+    incPC mmix
 -- }}}
 
 -- FREM 'floating remainder' {{{
@@ -993,14 +1209,17 @@ runFREM mmix insn = do
 -- FINT 'floating integer' {{{
 runFINT :: RunInsn
 runFINT mmix insn = do
-  rdm0 <- toRoundModeRaw <$> mmixGetSR mmix rAIx
   let y = iGetYu insn
-  let rdm = fromMaybe rdm0 $ toRoundModeImm y
-  z <- mmixGetGRFZ mmix insn
-  let re = fpInt rdm z
-  mapM (issueATrip mmix) $ arithGetEx re
-  mmixSetGRFX mmix insn $ arithGetRx re
-  incPC mmix
+  if y > 4
+  then issueDTrapPb mmix
+  else do
+    rdm0 <- toRoundModeRaw <$> mmixGetSR mmix rAIx
+    let rdm = fromMaybe rdm0 $ toRoundModeImm y
+    z <- mmixGetGRFZ mmix insn
+    let re = fpInt rdm z
+    mapM (issueATrip mmix) $ arithGetEx re
+    mmixSetGRFX mmix insn $ arithGetRx re
+    incPC mmix
 -- }}}
 
 -- MUL 'multiply' {{{
@@ -1103,7 +1322,6 @@ runDIVUI mmix insn = do
 
 -- }}}
 
--- done
 -- 2* integer add/sub {{{
 
 -- ADD {{{
@@ -1276,7 +1494,6 @@ runXVIADDUI mmix insn = do
 
 -- }}}
 
--- done
 -- 3* integer compare/neg/shift {{{
 
 -- CMP {{{
@@ -1451,7 +1668,6 @@ runSRUI mmix insn = do
 
 -- }}}
 
--- done
 -- 4* branch {{{
 
 -- BN {{{
@@ -1459,7 +1675,7 @@ runBN :: RunInsn
 runBN mmix insn = do
   x <- mmixGetGRX mmix insn
   if testN x
-  then branchForward mmix insn
+  then runBranchForward mmix insn
   else incPC mmix
 -- }}}
 
@@ -1468,7 +1684,7 @@ runBNB :: RunInsn
 runBNB mmix insn = do
   x <- mmixGetGRX mmix insn
   if testN x
-  then branchBackward mmix insn
+  then runBranchBackward mmix insn
   else incPC mmix
 -- }}}
 
@@ -1477,7 +1693,7 @@ runBZ :: RunInsn
 runBZ mmix insn = do
   x <- mmixGetGRX mmix insn
   if testZ x
-  then branchForward mmix insn
+  then runBranchForward mmix insn
   else incPC mmix
 -- }}}
 
@@ -1486,7 +1702,7 @@ runBZB :: RunInsn
 runBZB mmix insn = do
   x <- mmixGetGRX mmix insn
   if testZ x
-  then branchBackward mmix insn
+  then runBranchBackward mmix insn
   else incPC mmix
 -- }}}
 
@@ -1495,7 +1711,7 @@ runBP :: RunInsn
 runBP mmix insn = do
   x <- mmixGetGRX mmix insn
   if testP x
-  then branchForward mmix insn
+  then runBranchForward mmix insn
   else incPC mmix
 -- }}}
 
@@ -1504,7 +1720,7 @@ runBPB :: RunInsn
 runBPB mmix insn = do
   x <- mmixGetGRX mmix insn
   if testP x
-  then branchBackward mmix insn
+  then runBranchBackward mmix insn
   else incPC mmix
 -- }}}
 
@@ -1513,7 +1729,7 @@ runBOD :: RunInsn
 runBOD mmix insn = do
   x <- mmixGetGRX mmix insn
   if testODD x
-  then branchForward mmix insn
+  then runBranchForward mmix insn
   else incPC mmix
 -- }}}
 
@@ -1522,7 +1738,7 @@ runBODB :: RunInsn
 runBODB mmix insn = do
   x <- mmixGetGRX mmix insn
   if testODD x
-  then branchBackward mmix insn
+  then runBranchBackward mmix insn
   else incPC mmix
 -- }}}
 
@@ -1531,7 +1747,7 @@ runBNN :: RunInsn
 runBNN mmix insn = do
   x <- mmixGetGRX mmix insn
   if testNN x
-  then branchForward mmix insn
+  then runBranchForward mmix insn
   else incPC mmix
 -- }}}
 
@@ -1540,7 +1756,7 @@ runBNNB :: RunInsn
 runBNNB mmix insn = do
   x <- mmixGetGRX mmix insn
   if testNN x
-  then branchBackward mmix insn
+  then runBranchBackward mmix insn
   else incPC mmix
 -- }}}
 
@@ -1549,7 +1765,7 @@ runBNZ :: RunInsn
 runBNZ mmix insn = do
   x <- mmixGetGRX mmix insn
   if testNZ x
-  then branchForward mmix insn
+  then runBranchForward mmix insn
   else incPC mmix
 -- }}}
 
@@ -1558,7 +1774,7 @@ runBNZB :: RunInsn
 runBNZB mmix insn = do
   x <- mmixGetGRX mmix insn
   if testNZ x
-  then branchBackward mmix insn
+  then runBranchBackward mmix insn
   else incPC mmix
 -- }}}
 
@@ -1567,7 +1783,7 @@ runBNP :: RunInsn
 runBNP mmix insn = do
   x <- mmixGetGRX mmix insn
   if testNP x
-  then branchForward mmix insn
+  then runBranchForward mmix insn
   else incPC mmix
 -- }}}
 
@@ -1576,7 +1792,7 @@ runBNPB :: RunInsn
 runBNPB mmix insn = do
   x <- mmixGetGRX mmix insn
   if testNP x
-  then branchBackward mmix insn
+  then runBranchBackward mmix insn
   else incPC mmix
 -- }}}
 
@@ -1585,7 +1801,7 @@ runBEV :: RunInsn
 runBEV mmix insn = do
   x <- mmixGetGRX mmix insn
   if testEVEN x
-  then branchForward mmix insn
+  then runBranchForward mmix insn
   else incPC mmix
 -- }}}
 
@@ -1594,13 +1810,12 @@ runBEVB :: RunInsn
 runBEVB mmix insn = do
   x <- mmixGetGRX mmix insn
   if testEVEN x
-  then branchBackward mmix insn
+  then runBranchBackward mmix insn
   else incPC mmix
 -- }}}
 
 -- }}}
 
--- done
 -- 5* probable branch {{{
 
 -- PBN {{{
@@ -1608,7 +1823,7 @@ runPBN :: RunInsn
 runPBN mmix insn = do
   x <- mmixGetGRX mmix insn
   if testN x
-  then branchForward mmix insn
+  then runBranchForward mmix insn
   else incPC mmix
 -- }}}
 
@@ -1617,7 +1832,7 @@ runPBNB :: RunInsn
 runPBNB mmix insn = do
   x <- mmixGetGRX mmix insn
   if testN x
-  then branchBackward mmix insn
+  then runBranchBackward mmix insn
   else incPC mmix
 -- }}}
 
@@ -1626,7 +1841,7 @@ runPBZ :: RunInsn
 runPBZ mmix insn = do
   x <- mmixGetGRX mmix insn
   if testZ x
-  then branchForward mmix insn
+  then runBranchForward mmix insn
   else incPC mmix
 -- }}}
 
@@ -1635,7 +1850,7 @@ runPBZB :: RunInsn
 runPBZB mmix insn = do
   x <- mmixGetGRX mmix insn
   if testZ x
-  then branchBackward mmix insn
+  then runBranchBackward mmix insn
   else incPC mmix
 -- }}}
 
@@ -1644,7 +1859,7 @@ runPBP :: RunInsn
 runPBP mmix insn = do
   x <- mmixGetGRX mmix insn
   if testP x
-  then branchForward mmix insn
+  then runBranchForward mmix insn
   else incPC mmix
 -- }}}
 
@@ -1653,7 +1868,7 @@ runPBPB :: RunInsn
 runPBPB mmix insn = do
   x <- mmixGetGRX mmix insn
   if testP x
-  then branchBackward mmix insn
+  then runBranchBackward mmix insn
   else incPC mmix
 -- }}}
 
@@ -1662,7 +1877,7 @@ runPBOD :: RunInsn
 runPBOD mmix insn = do
   x <- mmixGetGRX mmix insn
   if testODD x
-  then branchForward mmix insn
+  then runBranchForward mmix insn
   else incPC mmix
 -- }}}
 
@@ -1671,7 +1886,7 @@ runPBODB :: RunInsn
 runPBODB mmix insn = do
   x <- mmixGetGRX mmix insn
   if testODD x
-  then branchBackward mmix insn
+  then runBranchBackward mmix insn
   else incPC mmix
 -- }}}
 
@@ -1680,7 +1895,7 @@ runPBNN :: RunInsn
 runPBNN mmix insn = do
   x <- mmixGetGRX mmix insn
   if testNN x
-  then branchForward mmix insn
+  then runBranchForward mmix insn
   else incPC mmix
 -- }}}
 
@@ -1689,7 +1904,7 @@ runPBNNB :: RunInsn
 runPBNNB mmix insn = do
   x <- mmixGetGRX mmix insn
   if testNN x
-  then branchBackward mmix insn
+  then runBranchBackward mmix insn
   else incPC mmix
 -- }}}
 
@@ -1698,7 +1913,7 @@ runPBNZ :: RunInsn
 runPBNZ mmix insn = do
   x <- mmixGetGRX mmix insn
   if testNZ x
-  then branchForward mmix insn
+  then runBranchForward mmix insn
   else incPC mmix
 -- }}}
 
@@ -1707,7 +1922,7 @@ runPBNZB :: RunInsn
 runPBNZB mmix insn = do
   x <- mmixGetGRX mmix insn
   if testNZ x
-  then branchBackward mmix insn
+  then runBranchBackward mmix insn
   else incPC mmix
 -- }}}
 
@@ -1716,7 +1931,7 @@ runPBNP :: RunInsn
 runPBNP mmix insn = do
   x <- mmixGetGRX mmix insn
   if testNP x
-  then branchForward mmix insn
+  then runBranchForward mmix insn
   else incPC mmix
 -- }}}
 
@@ -1725,7 +1940,7 @@ runPBNPB :: RunInsn
 runPBNPB mmix insn = do
   x <- mmixGetGRX mmix insn
   if testNP x
-  then branchBackward mmix insn
+  then runBranchBackward mmix insn
   else incPC mmix
 -- }}}
 
@@ -1734,7 +1949,7 @@ runPBEV :: RunInsn
 runPBEV mmix insn = do
   x <- mmixGetGRX mmix insn
   if testEVEN x
-  then branchForward mmix insn
+  then runBranchForward mmix insn
   else incPC mmix
 -- }}}
 
@@ -1743,13 +1958,12 @@ runPBEVB :: RunInsn
 runPBEVB mmix insn = do
   x <- mmixGetGRX mmix insn
   if testEVEN x
-  then branchBackward mmix insn
+  then runBranchBackward mmix insn
   else incPC mmix
 -- }}}
 
 -- }}}
 
--- done
 -- 6* conditional set {{{
 
 -- CSN {{{
@@ -1890,7 +2104,6 @@ runCSEVI mmix insn = do
 
 -- }}}
 
--- done
 -- 7* zero or set {{{
 
 -- ZSN {{{
@@ -2031,7 +2244,6 @@ runZSEVI mmix insn = do
 
 -- }}}
 
--- done
 -- 8* load {{{
 
 -- LDB {{{
@@ -2220,7 +2432,6 @@ runLDOUI mmix insn = do
 
 -- }}}
 
--- done
 -- 9* special L/S; cache; TC; GO {{{
 
 -- LDSF 'load short float' {{{
@@ -2381,7 +2592,6 @@ runGOI mmix insn = do
 
 -- }}}
 
--- done
 -- a* store {{{
 
 -- STB {{{
@@ -2570,8 +2780,7 @@ runSTOUI mmix insn = do
 
 -- }}}
 
--- TODO (pushgo)
--- b* special access; cache; sync {{{
+-- b* special access; cache; sync; pushgo {{{
 
 -- STSF 'store short float' {{{
 runSTSF :: RunInsn
@@ -2694,21 +2903,21 @@ runPREST mmix insn = do
   incPC mmix
 -- }}}
 
--- PRESTI {{{
+-- PRESTI 'prestore data immediate' {{{
 runPRESTI :: RunInsn
 runPRESTI mmix insn = do
   -- Just do nothing, update it in future.
   incPC mmix
 -- }}}
 
--- SYNCID {{{
+-- SYNCID 'synchronize instructions and data' {{{
 runSYNCID :: RunInsn
 runSYNCID mmix insn = do
   -- Just do nothing, update it in future.
   incPC mmix
 -- }}}
 
--- SYNCIDI {{{
+-- SYNCIDI 'synchronize instructions and data immediate' {{{
 runSYNCIDI :: RunInsn
 runSYNCIDI mmix insn = do
   -- Just do nothing, update it in future.
@@ -2717,17 +2926,29 @@ runSYNCIDI mmix insn = do
 
 -- PUSHGO 'push registers and go' {{{
 runPUSHGO :: RunInsn
-runPUSHGO mmix insn = do undefined
+runPUSHGO mmix insn = do
+  let x = iGetX insn
+  (y, z) <- mmixGetGRYZ mmix insn
+  runPush mmix x
+  --trapped <- checkTrapped mmix
+  --unless trapped $ 
+  runPGo mmix (y + z)
 -- }}}
 
--- PUSHGOI {{{
+-- PUSHGOI 'push registers and go immediate' {{{
 runPUSHGOI :: RunInsn
-runPUSHGOI mmix insn = do undefined
+runPUSHGOI mmix insn = do
+  let x = iGetX insn
+  y <- mmixGetGRY mmix insn
+  let z = iGetZu insn
+  runPush mmix x
+  --trapped <- checkTrapped mmix
+  --unless trapped $
+  runPGo mmix (y + z)
 -- }}}
 
 -- }}}
 
--- done
 -- c* bit logic (and/or/xor/nor) {{{
 
 -- OR {{{
@@ -2868,7 +3089,6 @@ runNXORI mmix insn = do
 
 -- }}}
 
--- done
 -- d* bytes magic {{{
 
 -- BDIF 'byte difference' {{{
@@ -3011,8 +3231,7 @@ runMXORI mmix insn = do
 
 -- }}}
 
--- done
--- e* {{{
+-- e* wyde-field (set/get/or/andn) {{{
 
 -- SETH {{{
 runSETH :: RunInsn
@@ -3169,34 +3388,43 @@ runANDNL mmix insn = do
 
 -- }}}
 
--- TODO
--- f* {{{
+-- f* jump; call/return; sr; context; trip {{{
 
--- JMP {{{
+-- JMP 'jump forward' {{{
 runJMP :: RunInsn
-runJMP mmix insn = do undefined
+runJMP mmix insn = runJumpForward mmix insn
 -- }}}
 
--- JMPB {{{
+-- JMPB 'jump backward' {{{
 runJMPB :: RunInsn
-runJMPB mmix insn = do undefined
+runJMPB mmix insn = runJumpBackward mmix insn
 -- }}}
 
--- PUSHJ {{{
+-- PUSHJ 'push registers and jump forward' {{{
 runPUSHJ :: RunInsn
-runPUSHJ mmix insn = do undefined
+runPUSHJ mmix insn = do
+  let x = iGetX insn
+  runPushGR mmix x
+  --trapped <- checkTrapped mmix
+  --unless trapped $
+  runPJumpForward mmix insn
 -- }}}
 
--- PUSHJB {{{
+-- PUSHJB 'push registers and jump backward' {{{
 runPUSHJB :: RunInsn
-runPUSHJB mmix insn = do undefined
+runPUSHJB mmix insn = do
+  let x = iGetX insn
+  runPushGR mmix x
+  --trapped <- checkTrapped mmix
+  --unless trapped $
+  runPJumpBackward mmix insn
 -- }}}
 
 -- GETA 'get address forward' {{{
 runGETA :: RunInsn
 runGETA mmix insn = do
   pc <- mmixGetPC mmix
-  let addr = pc + (iGetYZu `shiftL` 2)
+  let addr = pc + (iGetYZu insn `shiftL` 2)
   mmixSetGRX mmix insn addr
   incPC mmix
 -- }}}
@@ -3205,73 +3433,108 @@ runGETA mmix insn = do
 runGETAB :: RunInsn
 runGETAB mmix insn = do
   pc <- mmixGetPC mmix
-  let addr = pc + (iGetYZu `shiftL` 2) - 0x40000
+  let addr = pc + (iGetYZu insn `shiftL` 2) - 0x40000
   mmixSetGRX mmix insn addr
   incPC mmix
 -- }}}
 
--- PUT {{{
-PUT {{{
+-- PUT 'put into special register' {{{
 runPUT :: RunInsn
-runPUT mmix insn = do undefined
+runPUT mmix insn = do
+  let x = iGetX insn
+  let y = iGetY insn
+  z <- mmixGetGRZ mmix insn
+  if y == 0
+  then putSR mmix x z
+  else issueDTrapPb mmix
+  incPC mmix
 -- }}}
 
--- PUTI {{{
+-- PUTI 'put into special register immediate' {{{
 runPUTI :: RunInsn
-runPUTI mmix insn = do undefined
+runPUTI mmix insn = do
+  let x = iGetX insn
+  let y = iGetY insn
+  let z = iGetZu insn
+  if y == 0
+  then putSR mmix x z
+  else issueDTrapPb mmix
+  incPC mmix
 -- }}}
 
--- POP {{{
+-- POP 'pop registers and return from subroutine' {{{
 runPOP :: RunInsn
-runPOP mmix insn = do undefined
+runPOP mmix insn = do
+  let x = iGetX insn
+  let yz = iGetYZu insn
+  runPopGR mmix x
+  --trapped <- checkTrapped mmix
+  --unless trapped $ do
+  rJ <- mmixGetSR mmix rJIx
+  mmixSetPC mmix $ rJ + (yz `shiftL` 2)
 -- }}}
 
+-- TODO *3
 -- RESUME {{{
 runRESUME :: RunInsn
-runRESUME mmix insn = do undefined
+runRESUME mmix insn = do
+  let xy = iGetXY insn
+  when (xy /= 0) $ issueDTrapPb mmix
+  let z = iGetZ insn
+  runResume mmix z
 -- }}}
 
--- SAVE {{{
+-- SAVE 'save process state' {{{
 runSAVE :: RunInsn
-runSAVE mmix insn = do undefined
+runSAVE mmix insn = do
+  let yz = iGetYZu insn
+  when (yz /= 0) $ issueDTrapPb mmix
+  runSave mmix -- TODO
 -- }}}
 
--- UNSAVE {{{
+-- UNSAVE 'restore process state' {{{
 runUNSAVE :: RunInsn
 runUNSAVE mmix insn = do undefined
 -- }}}
 
--- SYNC {{{
+-- SYNC 'synchronize' {{{
 runSYNC :: RunInsn
-runSYNC mmix insn = do undefined
+runSYNC mmix insn = do
+  let xyz = iGetXYZu insn
+  when (xyz > 7) issueDTrapPb mmix
+  incPC mmix
 -- }}}
 
--- SWYM {{{
+-- SWYM 'sympathize with your machinery' {{{
 runSWYM :: RunInsn
-runSWYM mmix insn = do undefined
+runSWYM mmix insn = do incPC mmix
 -- }}}
 
 -- GET 'get from special register' {{{
 runGET :: RunInsn
 runGET mmix insn = do
   let z = iGetZ insn
-  if z >= 32
-  then issueDTrapPk mmix
+  let y = iGetY insn
+  if z > 31 || y /= 0
+  then do
+    issueDTrapPb mmix
+    mmixSetGRX mmix insn 0
   else do
+    -- if get rQ then clear rQQ
+    when (z == rQIx) mmixSetGR mmix rQQIx 0
     sr <- mmixGetSR mmix z
     mmixSetGRX mmix insn sr
   incPC mmix
 -- }}}
 
--- TRIP {{{
+-- TRIP 'trip' {{{
 runTRIP :: RunInsn
-runTRIP mmix insn = do undefined
+runTRIP mmix insn = do
+  issueTrip mmix
+  incPC mmix
 -- }}}
 
 -- }}}
 
 -- }}}
-
-
--- vim: fdm=marker
 

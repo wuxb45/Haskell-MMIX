@@ -61,7 +61,20 @@ module MMIX.Basics (
   rQIx, rUIx, rVIx, rGIx, rLIx, rAIx, rFIx, rPIx,
   rWIx, rXIx, rYIx, rZIx, rWWIx, rXXIx, rYYIx, rZZIx,
 
+  rQQIx, rTRIPIx, rTRAPIx,
+
+  rKFlow, rKFprog, rKFhigh, rKFmachine,
+  rKFr, rKFw, rKFx, rKFn, rKFk, rKFb, rKFs, rKFp,
+  rKBr, rKBw, rKBx, rKBn, rKBk, rKBb, rKBs, rKBp,
+
+  rQFlow, rQFprog, rQFhigh, rQFmachine,
+  rQFr, rQFw, rQFx, rQFn, rQFk, rQFb, rQFs, rQFp,
+  rQBr, rQBw, rQBx, rQBn, rQBk, rQBb, rQBs, rQBp,
+
   rVFb1,rVFb2,rVFb3,rVFb4,rVFs,rVFr,rVFn,rVFf,
+
+  rGFg, rGFZero,
+  rLFl, rLFZero,
 
   rAFEnable,
   rAFEnableD,rAFEnableV,rAFEnableW,rAFEnableI,
@@ -73,15 +86,7 @@ module MMIX.Basics (
   rAFEventO, rAFEventU, rAFEventZ, rAFEventX,
   rABEventD, rABEventV, rABEventW, rABEventI,
   rABEventO, rABEventU, rABEventZ, rABEventX,
-  rAFRoundMode,
-
-  rQFlow, rQFprog, rQFhigh, rQFmachine,
-  rQFr, rQFw, rQFx, rQFn, rQFk, rQFb, rQFs, rQFp,
-  rQBr, rQBw, rQBx, rQBn, rQBk, rQBb, rQBs, rQBp,
-
-  rKFlow, rKFprog, rKFhigh, rKFmachine,
-  rKFr, rKFw, rKFx, rKFn, rKFk, rKFb, rKFs, rKFp,
-  rKBr, rKBw, rKBx, rKBn, rKBk, rKBb, rKBs, rKBp,
+  rAFRoundMode, rAFZero,
 
   rXFsign, rXFinsn, rXFrop,
 
@@ -116,6 +121,7 @@ module MMIX.Basics (
 -- MMIX helpers {{{
   mmixGetGRS, mmixSetGRS,
   mmixGetGRF, mmixSetGRF,
+  mmixCopyGR,
   mmixGetSRF, mmixSetSRF,
   mmixSetGRX, mmixSetGRSX, mmixSetGRFX,
   mmixGetGRX, mmixGetGRSX, mmixGetGRFX,
@@ -219,7 +225,7 @@ import Prelude
          Double, Float,
          (.), ($), (+), (-), (*), (/), (||), (&&),
          (>=), (<=), (<), (>),
-         fromIntegral, otherwise, fst, id, error, undefined,
+         fromIntegral, otherwise, fst, snd, id, error, undefined,
        )
 import Control.Applicative (Applicative (..), (<$>), (<*>))
 import Control.Monad (Monad (..), Functor (..), (>>=),
@@ -721,13 +727,6 @@ type GRIx = RIx       -- general register index
 
 type RD = IOUArray RAddr Octa  -- register device
 
--- caution: unsafePerformIO, debug only, remove later
-{-
-instance Show RD where
-  show a = show elist
-    where elist = unsafePerformIO $ getElems a
--}
-
 -- set register
 rSet :: RD -> RIx -> Octa -> IO ()
 rSet = writeArray
@@ -736,13 +735,16 @@ rSet = writeArray
 rGet :: RD -> RIx -> IO Octa
 rGet = readArray
 
+-- GR: has 2 device: (L, G)
+type GRD = (RD, RD)
+
 -- }}}
 
 -- special registers {{{
 
 -- new special register device
 newSRD :: IO RD
-newSRD = newArray (0,31) 0
+newSRD = newArray (0,63) 0
 
 -- rB, rD, rE, rH, rJ, rM, rR, rBB --  0 ~  7 {{{
 
@@ -858,6 +860,20 @@ rYYIx = 30
 rZZIx :: SRIx
 rZZIx = 31
 
+-- }}}
+
+-- hidden special registers {{{
+-- rQQ: keep rQ bits after previous GET
+rQQIx :: SRIx
+rQQIx = 32
+
+-- rTRIP: signal trip
+rTRIPIx :: SRIx
+rTRIPIx = 34
+
+-- rTRAP: signal trap
+rTRAPIx :: SRIx
+rTRAPIx = 35
 -- }}}
 
 -- field operation info {{{
@@ -1036,12 +1052,18 @@ rVFf =  (2,0)
 rGFg :: BitFld
 rGFg = (7,0)
 
+rGFZero :: BitFld
+rGFZero = (63,8)
+
 -- }}}
 
 -- rL fields {{{
 
 rLFl :: BitFld
 rLFl = (7,0)
+
+rLFZero :: BitFld
+rLFZero = (63,8)
 
 -- }}}
 
@@ -1178,6 +1200,13 @@ rAFRoundMode = (17,16)
 
 -- }}}
 
+-- Always Zero {{{
+
+rAFZero :: BitFld
+rAFZero = (63,18)
+
+-- }}}
+
 -- }}}
 
 -- rX fields {{{
@@ -1261,8 +1290,11 @@ rXXBp = rQBp
 -- general registers {{{
 
 -- new general register device
-newGRD :: IO RD
-newGRD = newArray (0,255) 0
+newGRD :: IO GRD
+newGRD = do
+  lr <- newArray (0,255) 0
+  gr <- newArray (0,255) 0
+  return (lr, gr)
 
 -- }}}
 
@@ -1574,7 +1606,7 @@ data MMIX =
   MMIX
   { mmixPC   :: IORef VAddr
   , mmixSRD  :: RD
-  , mmixGRD  :: RD
+  , mmixGRD  :: GRD
   , mmixDev  :: dev
   }
 -- }}}
@@ -1596,24 +1628,35 @@ mmixSetSR mmix = rSet $ mmixSRD mmix
 -- }}}
 
 -- GR {{{
+mmixGRDL :: MMIX -> RD
+mmixGRDL = fst . mmixGRD
+
+mmixGRDG :: MMIX -> RD
+mmixGRDG = snd . mmixGRD
+
 mmixGetGR :: MMIX -> GRIx -> IO Octa
 mmixGetGR mmix ix = do
-  l <- xob 7 `fmap` mmixGetSR mmix rLIx
-  g <- xob 7 `fmap` mmixGetSR mmix rGIx
-  if ix < l || ix >= g
-  then rGet (mmixGRD mmix) ix
-  else return 0
+  l <- cast <$> mmixGetSR mmix rLIx
+  g <- cast <$> mmixGetSR mmix rGIx
+  o <- cast <$> mmixGetSR mmix rOIx
+  if ix < l
+  then rGet (mmixGRDL mmix) (o + ix)
+  else
+    if ix >= g
+    then rGet (mmixGRDG mmix) (ix)
+    else return 0
 
 mmixSetGR :: MMIX -> GRIx -> Octa -> IO ()
 mmixSetGR mmix ix v = do
-  rL <- mmixGetSR mmix rLIx
-  rG <- mmixGetSR mmix rGIx
-  let l = cast rL :: GRIx
-  let g = cast rG :: GRIx
-  when (l <= ix && ix < g) $ do
-    mapM (\i -> rSet (mmixGRD mmix) i 0) [l..(ix - 1)]
+  l <- cast <$> mmixGetSR mmix rLIx
+  g <- cast <$> mmixGetSR mmix rGIx
+  o <- cast <$> mmixGetSR mmix rOIx
+  when (l <= ix && ix < g) $ do -- fill 0, inc rL
+    mapM (\i -> rSet (mmixGRDL mmix) (o + i) 0) [l .. (ix - 1)]
     mmixSetSR mmix rLIx $ cast (ix + 1)
-  rSet (mmixGRD mmix) ix v
+  if ix < g
+  then rSet (mmixGRDL mmix) (o + ix) v
+  else rSet (mmixGRDG mmix) ix v
 
 -- }}}
 
@@ -1676,6 +1719,13 @@ mmixGetGRF mmix ix = castOtoF <$> mmixGetGR mmix ix
 
 mmixSetGRF :: MMIX -> GRIx -> FP -> IO ()
 mmixSetGRF mmix ix v = mmixSetGR mmix ix $ castFtoO v
+-- }}}
+
+-- move GR {{{
+mmixCopyGR :: MMIX -> GRIx -> GRIx -> IO ()
+mmixCopyGR mmix from to = do
+  r <- mmixGetGR mmix from
+  mmixSetGR mmix to r
 -- }}}
 
 -- SR operation for FP {{{
