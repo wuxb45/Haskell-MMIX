@@ -99,7 +99,7 @@ module MMIX.Basics (
 -- }}}
 -- instruction operation {{{
   iGetOPCode, iGetX, iGetY, iGetZ, iGetYZ, iGetXYZ,
-  iGetXu, iGetYu, iGetZu, iGetYZu, iGetXYZu,
+  iGetXu, iGetYu, iGetZu, iGetYZu, iGetXYu, iGetXYZu,
   iGetXs, iGetYs, iGetZs, iGetYZs, iGetXYZs,
 -- }}}
 -- opcode {{{
@@ -1345,6 +1345,10 @@ iGetZu = cast . iGetZ
 -- get YZ value
 iGetYZu :: Insn -> Octa
 iGetYZu i = cast $ i .&. 0xffff
+
+-- get XY value
+iGetXYu :: Insn -> Octa
+iGetXYu = (`shiftR` 8) . iGetXYZu
 
 -- get XYZ value
 iGetXYZu :: Insn -> Octa
