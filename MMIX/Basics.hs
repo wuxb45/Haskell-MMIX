@@ -52,10 +52,10 @@ module MMIX.Basics (
 -- }}}
 -- common registers {{{
   RIx, SRIx, GRIx, RD,
-  rSet, rGet,
+  rSet, rGet, showR,
 -- }}}
 -- special registers {{{
-  newSRD,
+  newSRD, showSRD,
   rBIx, rDIx, rEIx, rHIx, rJIx, rMIx, rRIx, rBBIx,
   rCIx, rNIx, rOIx, rSIx, rIIx, rTIx, rTTIx, rKIx,
   rQIx, rUIx, rVIx, rGIx, rLIx, rAIx, rFIx, rPIx,
@@ -116,12 +116,11 @@ module MMIX.Basics (
   mmixLdOcta, mmixLdTetra, mmixLdWyde, mmixLdByte,
   mmixLdOcta0, mmixLdTetra0, mmixLdWyde0, mmixLdByte0,
   mmixStOcta, mmixStTetra, mmixStWyde, mmixStByte,
-  --newDummyMMIX,
+  newDummyMMIX,
 -- }}}
 -- MMIX helpers {{{
   mmixGetGRS, mmixSetGRS,
   mmixGetGRF, mmixSetGRF,
-  mmixCopyGR,
   mmixGetSRF, mmixSetSRF,
   mmixSetGRX, mmixSetGRSX, mmixSetGRFX,
   mmixGetGRX, mmixGetGRSX, mmixGetGRFX,
@@ -229,14 +228,15 @@ import Prelude
        )
 import Control.Applicative (Applicative (..), (<$>), (<*>))
 import Control.Monad (Monad (..), Functor (..), (>>=),
-                      fmap, return, when, mapM,)
+                      fmap, return, when, mapM, sequence)
 import Data.Array.IO (IOUArray)
 import Data.Array.MArray (MArray, newArray, getElems,
                           readArray, writeArray)
 import Data.Bits (Bits (..), bit, shift, shiftR, shiftL,
                   (.&.), (.|.), complement, popCount)
 import Data.Eq (Eq (..))
-import Data.List (filter, map, head, zip, (++), nub, foldl1')
+import Data.List (filter, map, head, zip, zipWith, take,
+                  (++), nub, foldl1', concat, concatMap)
 import Data.Int (Int, Int64, Int32, Int16, Int8)
 import Data.Maybe (catMaybes, fromMaybe)
 import qualified Data.Map as Map (Map, fromList, (!))
@@ -246,6 +246,7 @@ import Data.Word (Word64, Word32, Word16, Word8)
 import Data.IORef (IORef, readIORef, writeIORef, newIORef)
 import Debug.Trace (trace, traceShow, traceIO)
 import Numeric (showHex)
+import System.IO (putStrLn)
 import Text.Printf (printf)
 import Text.Show (Show (..))
 import Unsafe.Coerce (unsafeCoerce)
@@ -742,13 +743,34 @@ rGet = readArray
 -- GR: has 2 device: (L, G)
 type GRD = (RD, RD)
 
+-- showR: show register
+-- value -> name -> String
+showR :: String -> Octa -> String
+showR name v = printf "[%4s #%016x (%20u)]\n" name v v
 -- }}}
 
 -- special registers {{{
 
 -- new special register device
 newSRD :: IO RD
-newSRD = newArray (0,255) 0
+newSRD = do
+  arr <- newArray (0,255) 0
+  rSet arr rGIx 255
+  return arr
+
+-- showSRD {{{
+srNameList :: [String]
+srNameList =
+  [ "rB", "rD", "rE", "rH", "rJ", "rM", "rR", "rBB"
+  , "rC", "rN", "rO", "rS", "rI", "rT", "rTT", "rK"
+  , "rQ", "rU", "rV", "rG", "rL", "rA", "rF", "rP"
+  , "rW", "rX", "rY", "rZ", "rWW","rXX","rYY","rZZ" ]
+
+showSRD :: RD -> IO String
+showSRD srd = do
+  rvList <- mapM (rGet srd) [0 .. 31]
+  return $ concat $ zipWith showR srNameList rvList
+-- }}}
 
 -- rB, rD, rE, rH, rJ, rM, rR, rBB --  0 ~  7 {{{
 
@@ -1306,7 +1328,6 @@ newGRD = do
   lr <- newArray (0,255) 0
   gr <- newArray (0,255) 0
   return (lr, gr)
-
 -- }}}
 
 -- instruction field operations {{{
@@ -1602,19 +1623,12 @@ class Device dev where
 
 -- }}}
 
--- dummy zero dev, accept any address {{{
-
-data ZDev = ZDev
---instance Device ZDev where
-
--- }}}
-
 -- MMIX machine model {{{
 
 -- the MMIX {{{
 --   1 pc
---   64 spr
---   256 gpr
+--   32 + n SR
+--   256 GR
 --   some memory-mapped devices.
 data MMIX =
   forall dev.  (Device dev) =>
@@ -1624,6 +1638,24 @@ data MMIX =
   , mmixGRD  :: GRD
   , mmixDev  :: dev
   }
+
+showMMIX :: MMIX -> IO ()
+showMMIX mmix = do
+  pc <- mmixGetPC mmix
+  printf "PC: #%16x\n" pc
+  srText <- showSRD $ mmixSRD mmix
+  putStrLn srText
+  showMMIXGRD mmix
+  putStrLn "end\n"
+
+showMMIXGRD :: MMIX -> IO ()
+showMMIXGRD mmix = do
+  l <- cast <$> mmixGetSR mmix rLIx
+  g <- cast <$> mmixGetSR mmix rGIx
+  let rIdList = take (cast l) [0 ..] ++ [g .. 255]
+  rVList <- mapM (mmixGetGR mmix) rIdList
+  putStrLn $ concat $ zipWith (showR) (map show rIdList) rVList
+  
 -- }}}
 
 -- PC {{{
@@ -1713,8 +1745,21 @@ mmixStByte :: MMIX -> PAddr -> Byte -> IO Bool
 mmixStByte (MMIX _ _ _ dev) = devWriteByte dev
 -- }}}
 
---newDummyMMIX :: IO MMIX
---newDummyMMIX = MMIX <$> newIORef 0 <*> newSRD <*> newGRD <*> return ZDev
+-- minimum MMIX with ZDev {{{
+
+-- dummy zero dev, accept any address {{{
+data ZDev = ZDev
+
+instance Device ZDev where
+  devAddrOk _ _ = True
+  devReadOcta _ _ = return $ Just 0
+  devWriteOcta _ _ _ = return True
+-- }}}
+
+newDummyMMIX :: IO MMIX
+newDummyMMIX = MMIX <$> newIORef (1 `shiftL` 63) <*> newSRD <*> newGRD <*> return ZDev
+
+-- }}}
 
 -- }}}
 
@@ -1736,13 +1781,14 @@ mmixSetGRF :: MMIX -> GRIx -> FP -> IO ()
 mmixSetGRF mmix ix v = mmixSetGR mmix ix $ castFtoO v
 -- }}}
 
+{-
 -- move GR {{{
 mmixCopyGR :: MMIX -> GRIx -> GRIx -> IO ()
 mmixCopyGR mmix from to = do
   r <- mmixGetGR mmix from
   mmixSetGR mmix to r
 -- }}}
-
+-}
 -- SR operation for FP {{{
 mmixGetSRF :: MMIX -> SRIx -> IO FP
 mmixGetSRF mmix ix = castOtoF <$> mmixGetSR mmix ix
