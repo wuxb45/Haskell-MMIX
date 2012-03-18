@@ -13,7 +13,7 @@
 
 module MMIX.Basics (
 -- common helpers {{{
-  cast, hx,
+  cast, hx, traceShowIO,
   mapT2, mapT4, mapT8,
   zipT2, zipT4, zipT8,
 -- }}}
@@ -88,9 +88,9 @@ module MMIX.Basics (
   rABEventO, rABEventU, rABEventZ, rABEventX,
   rAFRoundMode, rAFZero,
 
-  rXFsign, rXFinsn, rXFrop,
+  rXFsign, rXBsign, rXFinsn, rXFrop,
 
-  rXXFsign, rXXFinsn, rXXFrop, rXXFprog,
+  rXXFsign, rXXBsign, rXXFinsn, rXXFrop, rXXFprog,
   rXXFr, rXXFw, rXXFx, rXXFn, rXXFk, rXXFb, rXXFs, rXXFp,
   rXXBr, rXXBw, rXXBx, rXXBn, rXXBk, rXXBb, rXXBs, rXXBp,
 -- }}}
@@ -244,7 +244,7 @@ import Data.Ratio ((%))
 import Data.String (String (..))
 import Data.Word (Word64, Word32, Word16, Word8)
 import Data.IORef (IORef, readIORef, writeIORef, newIORef)
-import Debug.Trace (trace, traceShow)
+import Debug.Trace (trace, traceShow, traceIO)
 import Numeric (showHex)
 import Text.Printf (printf)
 import Text.Show (Show (..))
@@ -260,6 +260,10 @@ cast = fromIntegral
 -- hx, show in Hex format
 hx :: (Integral a, Show a) => a -> String
 hx v = showHex v ""
+
+-- traceShowIO, traceShow on IO
+traceShowIO :: (Show a) => a -> IO ()
+traceShowIO a = traceIO $ show a
 
 -- map on tuple {{{
 mapT2 :: (a -> b)
@@ -744,7 +748,7 @@ type GRD = (RD, RD)
 
 -- new special register device
 newSRD :: IO RD
-newSRD = newArray (0,63) 0
+newSRD = newArray (0,255) 0
 
 -- rB, rD, rE, rH, rJ, rM, rR, rBB --  0 ~  7 {{{
 
@@ -874,6 +878,7 @@ rTRIPIx = 34
 -- rTRAP: signal trap
 rTRAPIx :: SRIx
 rTRAPIx = 35
+
 -- }}}
 
 -- field operation info {{{
@@ -1220,12 +1225,18 @@ rXFinsn = (31,0)
 rXFrop :: BitFld
 rXFrop = (62,56)
 
+rXBsign :: BitIx
+rXBsign = 63
+
 -- }}}
 
 -- rXX fields {{{
 
 rXXFsign :: BitFld
 rXXFsign = (63,63)
+
+rXXBsign :: BitIx
+rXXBsign = 63
 
 rXXFinsn :: BitFld
 rXXFinsn = (31,0)
