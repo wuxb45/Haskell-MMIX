@@ -1,12 +1,8 @@
 -- Copyright 2012 Wu Xingbo <wuxb45@gmail.com>
--- vim: fdm=marker
 
 -- module exports {{{
 module MMIX.Run (
-  vMapGetPTE,
-  doTrip,
-  doFTrap,
-  doDTrap,
+  runMMIX,
   ) where
 -- }}}
 
@@ -14,164 +10,25 @@ module MMIX.Run (
 
 import Data.Maybe (fromMaybe)
 import Data.Bits (complement, xor, shiftL, shiftR, (.|.), (.&.))
-import Control.Monad (when, unless, void)
+import Control.Monad (when, unless, void, (>>), (>>=), mapM,
+                      mapM_, sequence, sequence_, return, fmap,)
 import Data.Functor ((<$>))
 import Debug.Trace (trace, traceShow)
 import Data.Array.IArray (Array (..), array, (!))
-import MMIX.Basics
+import Data.Maybe (isNothing, fromJust)
+import Data.List (zip, take, elem, zipWith, reverse, repeat,)
+import Prelude
+       ( Maybe (..), Bool (..), IO (..), Ord (..),
+         Integral (..), Ordering (..), Num (..), Real (..),
+         Enum (..), Bounded (..),
+         Double, Float,
+         (.), ($), (+), (-), (*), (/), (||), (&&),
+         (>=), (<=), (<), (>), (/=), (==),
+         fromIntegral, otherwise, fst, snd,
+         id, error, undefined,)
+
+import MMIX.Base
 import MMIX.OMem
-
--- }}}
-
--- PTE operation {{{
-
--- type VMapParam: (base, limit, pn, nval) {{{
-type VMapParam = (Octa, Octa, Octa, Octa)
--- }}}
-
--- type VStartPoint: (nval, len, indexList) {{{
-type VStartPoint = (Octa, Octa, [Octa])
--- }}}
-
--- vMapGetPTE0: MMIX -> VAddr -> IO PTE, on fail returns 0 {{{
-vMapGetPTE0 :: MMIX -> VAddr -> IO PTE
-vMapGetPTE0 mmix vaddr = do
-  mbPTE <- vMapGetPTE mmix vaddr
-  case mbPTE of
-    Just pte -> return pte
-    Nothing -> return 0
-
--- }}}
-
--- vMapGetPTE: MMIX -> VAddr -> IO (Maybe PTE) {{{
-vMapGetPTE :: MMIX -> VAddr -> IO (Maybe PTE)
-vMapGetPTE mmix vaddr = do
-  rV <- mmixGetSR mmix rVIx -- no fail
-  let mbVMapParam = vMapPrepare vaddr rV
-  let mbStartPoint = mbVMapParam >>= vMapStartPoint
-  case mbStartPoint of
-    Just point -> vMapLookup mmix point
-    Nothing -> return Nothing
--- }}}
-
--- vMapGetPAddr: rV -> VAddr -> PTE -> PAddr {{{
-vMapGetPAddr :: Octa -> Octa -> Octa -> PAddr
-vMapGetPAddr rV vaddr pte = a .|. offset
-  -- make sure 13 <= s <= 48
-  where
-    s = fldGet rVFs rV
-    s' = max 13 $ min 48 s
-    a = fldGetRaw (48, s') pte
-    offset = fldGetRaw (s' - 1, 0) vaddr
--- }}}
-
--- helper functions {{{
-
--- vMapChecks (check s field) {{{
--- helper function, called by vMapPrepare
-vMapChecks :: Octa -> Bool
-vMapChecks rV = (s >= 13) && (s <= 48)
-  where s = fldGet rVFs rV
--- }}}
-
--- prepare parameters for recursive find PTE {{{
--- helper function, called by vMapGetPTE
-vMapPrepare :: VAddr -> Octa -> Maybe VMapParam
-vMapPrepare vaddr rV = 
-  if vMapChecks rV
-  then Just (base, limit, pn, nval)
-  else Nothing
-  where
-    seg = fldGet vaddrFseg vaddr
-    (b,bp) = case seg of
-      0 -> (0, fldGet rVFb1 rV)
-      1 -> (fldGet rVFb1 rV, fldGet rVFb2 rV)
-      2 -> (fldGet rVFb2 rV, fldGet rVFb3 rV)
-      3 -> (fldGet rVFb3 rV, fldGet rVFb4 rV)
-    raddr  = bitSet1 63 $ fldGetRaw rVFr rV
-    base   = (b `shiftL` 13) + raddr
-    virt   = fldSet0 (63,61) vaddr
-    s      = fldGet rVFs rV
-    pn     = virt `shiftR` (cast s)
-    limit  = (bp `shiftL` 13) + raddr + (if pn == 0 then 1 else 0)
-    nval   = bitSet1 63 $ fldGetRaw rVFn rV
--- }}}
-
--- guard for check n field match ptp {{{
--- helper function, called by vMapLookup
-vMapGuardPTP :: Octa -> PTP -> Maybe PTP
-vMapGuardPTP nval ptp =
-  if (ptp `xor` nval) .&. ptpmask == 0
-  then return ptp
-  else Nothing
-  -- check bit 63 and <n>
-  where ptpmask = fldMask (63,63) .|. fldMask rVFn
--- }}}
-
--- guard for check n field match pte {{{
--- helper function, called by vMapLookup
-vMapGuardPTE :: Octa -> PTE -> Maybe PTE
-vMapGuardPTE nval pte =
-  if (pte `xor` nval) .&. ptemask == 0
-  then return pte
-  else Nothing
-  -- check <n>
-  where ptemask = fldMask rVFn
--- }}}
-
--- guard for base < limit {{{
--- helper function, called by vMapStartPoint
-vMapGuardLimit :: Octa -> Octa -> a -> Maybe a
-vMapGuardLimit base limit a =
-  if base < limit then return a else Nothing
--- }}}
-
--- convert page-number to page-index list {{{
--- helper function, called by vMapStartPoint
-vMapGetPIxList :: Octa -> [Octa]
-vMapGetPIxList = reverse . splitPn
-  where
-    splitPn 0 = []
-    splitPn pn = pnIx:(splitPn pnShift)
-      where
-        pnShift = fldGet (63,10) pn
-        pnIx = fldGet (9,0) pn
--- }}}
-
--- get the start point of lookup: [base, idx-list] {{{
--- helper function, called by vMapGetPTE
-vMapStartPoint :: VMapParam -> Maybe VStartPoint
-vMapStartPoint (base, limit, pn, nval) =
-  if len < 1 || len > 5
-  then Nothing
-  else Just (nval, base', pageIxList) >>= vMapGuardLimit base' limit
-  where
-    pageIxList = vMapGetPIxList pn
-    len = cast $ length pageIxList :: Octa
-    base' = base + ((len - 1) * 0x2000)
--- }}}
-
--- load PTX (PTE/PTP) from Memory {{{
--- helper function, called by vMapLookup
-vMapLoadPTX :: MMIX -> PAddr -> PAddr -> IO (Maybe Octa)
-vMapLoadPTX mmix base index = mmixLdOcta mmix $ base + (index `shiftL` 3)
--- }}}
-
--- load (valid) PTE (maybe plus some PTP) {{{
--- helper function, called by vMapGetPTE
-vMapLookup :: MMIX -> VStartPoint -> IO (Maybe PTE)
-vMapLookup mmix (nval, base, [ix]) = do
-  mbPTE <- vMapLoadPTX mmix base ix
-  return $ mbPTE >>= vMapGuardPTE nval
-
-vMapLookup mmix (nval, base, ix:ixs) = do
-  mbPTP <- vMapLoadPTX mmix base ix
-  case mbPTP >>= vMapGuardPTP nval >>= Just . fldSet0 ptpFnq of
-    Just ptp -> vMapLookup mmix (nval, ptp, ixs)
-    Nothing -> return Nothing
--- }}}
-
--- }}}
 
 -- }}}
 
@@ -182,35 +39,60 @@ isVirtual :: VAddr -> Bool
 isVirtual vaddr = (fldGet vaddrFsign vaddr) == 0
 -- }}}
 
--- toPAddr: VAddr -> PAddr for a MMIX {{{
-toPAddr :: MMIX -> VAddr -> IO (Maybe PAddr)
-toPAddr mmix vaddr =
+-- toPAddrI: VAddr -> PAddr for a MMIX {{{
+toPAddrI :: MMIX -> VAddr -> IO (Maybe PAddr)
+toPAddrI mmix vaddr =
   if isVirtual vaddr
-  then toPAddrVMap mmix vaddr
+  then toPAddrVMapI mmix vaddr
   else return $ Just $ bitSet0 63 vaddr
--- }}}
 
--- toPAddrVMap: PAddr -> VAddr by page-tables {{{
-toPAddrVMap :: MMIX -> VAddr -> IO (Maybe PAddr)
-toPAddrVMap mmix vaddr = do
-  mbPTE <- vMapGetPTE mmix vaddr
+-- toPAddrVMapI: PAddr -> VAddr by page-tables {{{
+toPAddrVMapI :: MMIX -> VAddr -> IO (Maybe PAddr)
+toPAddrVMapI mmix vaddr = do
+  mbPTE <- vMapGetPTEI mmix vaddr
   case mbPTE of
     Just pte -> do
       rV <- mmixGetSR mmix rVIx
       return $ return $ vMapGetPAddr rV vaddr pte
     Nothing -> return Nothing
 -- }}}
+
+-- }}}
       
+-- toPAddrD: VAddr -> PAddr for a MMIX {{{
+toPAddrD :: MMIX -> VAddr -> IO (Maybe PAddr)
+toPAddrD mmix vaddr =
+  if isVirtual vaddr
+  then toPAddrVMapD mmix vaddr
+  else return $ Just $ bitSet0 63 vaddr
+
+-- toPAddrVMapD: PAddr -> VAddr by page-tables {{{
+toPAddrVMapD :: MMIX -> VAddr -> IO (Maybe PAddr)
+toPAddrVMapD mmix vaddr = do
+  mbPTE <- vMapGetPTED mmix vaddr
+  case mbPTE of
+    Just pte -> do
+      rV <- mmixGetSR mmix rVIx
+      return $ return $ vMapGetPAddr rV vaddr pte
+    Nothing -> return Nothing
+-- }}}
+
+-- }}}
+
 -- }}}
 
 -- load/store {{{
+
+-- load insn (Tetra) {{{
+
+-- }}}
 
 -- store (byte/wyde/tetra/octa; overflow/nothing) {{{
 
 -- store Octa {{{
 mmixVStOcta :: MMIX -> VAddr -> Octa -> IO ()
 mmixVStOcta mmix vaddr v = do
-  mbPAddr <- toPAddr mmix vaddr
+  mbPAddr <- toPAddrD mmix vaddr
   case mbPAddr of
     Just paddr -> void $ mmixStOcta mmix paddr v
     _ -> return ()
@@ -219,7 +101,7 @@ mmixVStOcta mmix vaddr v = do
 -- store Tetra unsigned {{{
 mmixVStTetrau :: MMIX -> VAddr -> Octa -> IO ()
 mmixVStTetrau mmix vaddr v = do
-  mbPAddr <- toPAddr mmix vaddr
+  mbPAddr <- toPAddrD mmix vaddr
   case mbPAddr of
     Just paddr -> void $ mmixStTetra mmix paddr $ cast v
     _ -> return ()
@@ -228,7 +110,7 @@ mmixVStTetrau mmix vaddr v = do
 -- store Wyde unsigned {{{
 mmixVStWydeu :: MMIX -> VAddr -> Octa -> IO ()
 mmixVStWydeu mmix vaddr v = do
-  mbPAddr <- toPAddr mmix vaddr
+  mbPAddr <- toPAddrD mmix vaddr
   case mbPAddr of
     Just paddr -> void $ mmixStWyde mmix paddr $ cast v
     _ -> return ()
@@ -237,7 +119,7 @@ mmixVStWydeu mmix vaddr v = do
 -- store Byte unsigned {{{
 mmixVStByteu :: MMIX -> VAddr -> Octa -> IO ()
 mmixVStByteu mmix vaddr v = do
-  mbPAddr <- toPAddr mmix vaddr
+  mbPAddr <- toPAddrD mmix vaddr
   case mbPAddr of
     Just paddr -> void $ mmixStByte mmix paddr $ cast v
     _ -> return ()
@@ -277,7 +159,7 @@ mmixVStByte mmix vaddr v = do
 -- load Octa {{{
 mmixVLdOcta :: MMIX -> VAddr -> IO Octa
 mmixVLdOcta mmix vaddr = do
-  mbPAddr <- toPAddr mmix vaddr
+  mbPAddr <- toPAddrD mmix vaddr
   v <- case mbPAddr of
     Just paddr -> mmixLdOcta0 mmix paddr
     _ -> return 0
@@ -287,7 +169,7 @@ mmixVLdOcta mmix vaddr = do
 -- load Tetra signed {{{
 mmixVLdTetra :: MMIX -> VAddr -> IO Octa
 mmixVLdTetra mmix vaddr = do
-  mbPAddr <- toPAddr mmix vaddr
+  mbPAddr <- toPAddrD mmix vaddr
   v <- case mbPAddr of
     Just paddr -> mmixLdTetra0 mmix paddr
     _ -> return 0
@@ -297,7 +179,7 @@ mmixVLdTetra mmix vaddr = do
 -- load Wyde signed {{{
 mmixVLdWyde :: MMIX -> VAddr -> IO Octa
 mmixVLdWyde mmix vaddr = do
-  mbPAddr <- toPAddr mmix vaddr
+  mbPAddr <- toPAddrD mmix vaddr
   v <- case mbPAddr of
     Just paddr -> mmixLdWyde0 mmix paddr
     _ -> return 0
@@ -307,7 +189,7 @@ mmixVLdWyde mmix vaddr = do
 -- load Byte signed {{{
 mmixVLdByte :: MMIX -> VAddr -> IO Octa
 mmixVLdByte mmix vaddr = do
-  mbPAddr <- toPAddr mmix vaddr
+  mbPAddr <- toPAddrD mmix vaddr
   v <- case mbPAddr of
     Just paddr -> mmixLdByte0 mmix paddr
     _ -> return 0
@@ -317,7 +199,7 @@ mmixVLdByte mmix vaddr = do
 -- load Tetra unsigned {{{
 mmixVLdTetrau :: MMIX -> VAddr -> IO Octa
 mmixVLdTetrau mmix vaddr = do
-  mbPAddr <- toPAddr mmix vaddr
+  mbPAddr <- toPAddrD mmix vaddr
   v <- case mbPAddr of
     Just paddr -> mmixLdTetra0 mmix paddr
     _ -> return 0
@@ -327,7 +209,7 @@ mmixVLdTetrau mmix vaddr = do
 -- load Wyde unsigned {{{
 mmixVLdWydeu :: MMIX -> VAddr -> IO Octa
 mmixVLdWydeu mmix vaddr = do
-  mbPAddr <- toPAddr mmix vaddr
+  mbPAddr <- toPAddrD mmix vaddr
   v <- case mbPAddr of
     Just paddr -> mmixLdWyde0 mmix paddr
     _ -> return 0
@@ -337,7 +219,7 @@ mmixVLdWydeu mmix vaddr = do
 -- load Byte unsigned {{{
 mmixVLdByteu :: MMIX -> VAddr -> IO Octa
 mmixVLdByteu mmix vaddr = do
-  mbPAddr <- toPAddr mmix vaddr
+  mbPAddr <- toPAddrD mmix vaddr
   v <- case mbPAddr of
     Just paddr -> mmixLdByte0 mmix paddr
     _ -> return 0
@@ -347,7 +229,7 @@ mmixVLdByteu mmix vaddr = do
 -- load high Tetra {{{
 mmixVLdHighTetra :: MMIX -> VAddr -> IO Octa
 mmixVLdHighTetra mmix vaddr = do
-  mbPAddr <- toPAddr mmix vaddr
+  mbPAddr <- toPAddrD mmix vaddr
   v <- case mbPAddr of
     Just paddr -> mmixLdTetra0 mmix paddr
     _ -> return 0
@@ -361,7 +243,7 @@ mmixVLdHighTetra mmix vaddr = do
 mmixVLdSF :: MMIX -> VAddr -> IO Octa
 mmixVLdSF mmix vaddr = do
   rdm <- toRoundModeRaw <$> mmixGetSR mmix rAIx
-  mbPAddr <- toPAddr mmix vaddr
+  mbPAddr <- toPAddrD mmix vaddr
   sfp <- case mbPAddr of
     Just paddr -> mmixLdTetra0 mmix paddr
     _ -> return 0
@@ -468,9 +350,70 @@ issueDTrapPp = issueDTrap rQBp
 
 -- }}}
 
+-- checkTrapped: check if MMIX has been (D)TRAPed {{{
+checkTrapped :: MMIX -> IO Bool
+checkTrapped mmix = do
+  rQ <- mmixGetSR mmix rQIx
+  rK <- mmixGetSR mmix rKIx
+  return $ (rQ .&. rK) /= 0
+-- }}}
+
 -- }}}
 
 -- do Trip/Trap (transfer control) {{{
+
+-- checkDoTrxp {{{
+checkDoTrxp :: MMIX -> IO ()
+checkDoTrxp mmix = do
+  -- priority: DTrap > ITrap > Trips
+  dtP <- checkDoDTrap mmix
+  unless dtP $ do
+    ftP <- checkDoFTrap mmix
+    unless ftP $ void $ checkDoTrip mmix
+
+checkDoTrip :: MMIX -> IO Bool
+checkDoTrip mmix = do
+  itP <- (/= 0) <$> mmixGetSR mmix rTRIPIx
+  insn <- cast <$> mmixGetSR mmix rTPIIx
+  pc <- mmixGetPC mmix
+  if itP
+  then do
+    doTrip mmix insn pc ITRIP
+    return True
+  else do
+    rA <- mmixGetSR mmix rAIx
+    let atList = tripCheck rA
+    case atList of
+      (t:_) -> doTrip mmix insn pc t >> return True
+      _ -> return False
+      
+
+-- check and do FTrap, return False on trap
+checkDoFTrap :: MMIX -> IO Bool
+checkDoFTrap mmix = do
+  ftP <- (/= 0) <$> mmixGetSR mmix rTRAPIx
+  if ftP
+  then do
+    insn <- cast <$> mmixGetSR mmix rTPIIx
+    pc <- mmixGetPC mmix
+    doFTrap mmix insn pc
+    return True
+  else
+    return False
+
+-- check and do DTrap, return False on trap
+checkDoDTrap :: MMIX -> IO Bool
+checkDoDTrap mmix = do
+  dtP <- checkTrapped mmix
+  if dtP
+  then do
+    insn <- cast <$> mmixGetSR mmix rTPIIx
+    pc <- mmixGetPC mmix
+    doDTrap mmix insn pc
+    return True
+  else
+    return False
+-- }}}
 
 -- doTrip: really do a trip (set regs, goto entries) {{{
 doTrip :: MMIX -> Insn -> VAddr -> TRIP -> IO ()
@@ -480,7 +423,7 @@ doTrip mmix insn naddr trip = do
   -- rW, return address
   mmixSetSR mmix rWIx naddr
   -- rX, resume info and the insn
-  mmixSetSR mmix rXIx $ fldSet1 rXFsign $ cast insn
+  mmixSetSR mmix rXIx $ bitSet1 rXBsign $ cast insn
   -- rY, maybe $Y
   y <- mmixGetGR mmix $ iGetY insn
   mmixSetSR mmix rYIx y
@@ -506,7 +449,7 @@ doFTrap mmix insn naddr = do
   -- rWW, return address
   mmixSetSR mmix rWWIx naddr
   -- rXX, resume info and the insn
-  mmixSetSR mmix rXXIx $ fldSet1 rXFsign $ cast insn
+  mmixSetSR mmix rXXIx $ bitSet1 rXBsign $ cast insn
   -- rYY, maybe $Y
   y <- mmixGetGR mmix $ iGetY insn
   mmixSetSR mmix rYYIx y
@@ -533,7 +476,7 @@ doDTrap mmix insn naddr = do
   mmixSetSR mmix rWWIx naddr
   -- rXX, resume info and the insn, dyn-trap also set <program> bits
   pBits <- fldGet rQFprog `fmap` mmixGetSR mmix rQIx
-  mmixSetSR mmix rXXIx $ fldSet1 rXXFsign $ fldSet rXXFprog pBits $ cast insn
+  mmixSetSR mmix rXXIx $ bitSet1 rXXBsign $ fldSet rXXFprog pBits $ cast insn
   -- rYY, maybe $Y
   y <- mmixGetGR mmix $ iGetY insn
   mmixSetSR mmix rYYIx y
@@ -589,13 +532,6 @@ checkPp rK = bitGet rKBp rK == 0
 
 -- }}}
 
--- checkTrapped: check if MMIX has been traped {{{
-checkTrapped :: MMIX -> IO Bool
-checkTrapped mmix = do
-  rQ <- mmixGetSR mmix rQIx
-  rK <- mmixGetSR mmix rKIx
-  return $ (rQ .&. rK) /= 0
--- }}}
 
 -- checkPCPosition: check and issue (s/p) {{{
 
@@ -628,7 +564,7 @@ checkVAddrExecute mmix vaddr = do
   when (fldGet (1,0) vaddr /= 0) $ traceShowIO ("Check: exec unaligned", vaddr)
   if isVirtual vaddr
   then do
-    pte <- vMapGetPTE0 mmix vaddr
+    pte <- vMapGetPTEI0 mmix vaddr
     let xOK = 1 == bitGet pteBpx pte
     unless xOK $ issueDTrapPx mmix
     return xOK
@@ -642,7 +578,7 @@ checkVAddrRead mmix vaddr = do
   when (fldGet (2,0) vaddr /= 0) $ traceShowIO ("Check: read unaligned", vaddr)
   if isVirtual vaddr
   then do
-    canRead <- checkPr <$> vMapGetPTE0 mmix vaddr
+    canRead <- checkPr <$> vMapGetPTED0 mmix vaddr
     unless canRead $ issueDTrapPr mmix
   else
     issueDTrapPn mmix
@@ -654,7 +590,7 @@ checkVAddrWrite mmix vaddr = do
   when (fldGet (2,0) vaddr /= 0) $ traceShowIO ("Check: write unaligned", vaddr)
   if isVirtual vaddr
   then do
-    canWrite <- checkPw <$> vMapGetPTE0 mmix vaddr
+    canWrite <- checkPw <$> vMapGetPTED0 mmix vaddr
     unless canWrite $ issueDTrapPw mmix
   else
     issueDTrapPn mmix
@@ -666,7 +602,7 @@ checkVAddrReadWrite mmix vaddr = do
   when (fldGet (2,0) vaddr /= 0) $ traceShowIO ("Check: read and write unaligned", vaddr)
   if isVirtual vaddr
   then do
-    pte <- vMapGetPTE0 mmix vaddr
+    pte <- vMapGetPTED0 mmix vaddr
     let canWrite = checkPw pte
     unless canWrite $ issueDTrapPw mmix
     let canRead = checkPr pte
@@ -692,9 +628,16 @@ checkVAddrWriteN mmix vaList = mapM_ (checkVAddrWrite mmix) vaList
 -- run mmix {{{
 runMMIX :: MMIX -> IO ()
 runMMIX mmix = do
+  -- keep 'insert' flag, clean it later
+  rINS <- mmixGetSR mmix rINSIx -- current inserted ?
+  -- check and run
   checkPCPosition mmix -- check s/p
   trapped <- checkTrapped mmix
   unless trapped $ runFetchExec mmix
+  -- clear 'insert' flag.
+  when (rINS /= 0) $ mmixSetSR mmix rINSIx 0
+  -- trap/trip
+  checkDoTrxp mmix
 -- }}}
 
 -- runFetchExec: check x and run {{{
@@ -710,20 +653,44 @@ runFetchExec mmix = do
 -- execute on any address, fetch/exec.
 runFetchExecAny :: MMIX -> VAddr -> IO ()
 runFetchExecAny mmix pc = do
-  mbPAddr <- toPAddr mmix pc
-  case mbPAddr of
-    Just paddr -> runPAddr mmix paddr
-    Nothing -> trace "fuck me! shit!" $ return ()
+  mbPAddr <- toPAddrI mmix pc
+  when (isNothing mbPAddr) $ error "fuck shit!"
+  runPAddr mmix $ fromJust mbPAddr
 
 -- }}}
 
 -- exec on PAddr {{{
 runPAddr :: MMIX -> PAddr -> IO ()
 runPAddr mmix paddr = do
-  mbInsn <- mmixLdTetra mmix paddr
-  case mbInsn of
-    Just insn -> runInsn mmix insn
-    Nothing -> trace "fuck me! shit!" $ return ()
+  rINS <- mmixGetSR mmix rINSIx
+  if rINS /= 0
+  then do -- run inserted insn.
+    insn <- cast <$> mmixGetSR mmix rRXIx
+    runInsn mmix insn
+  else do
+    mbInsn <- mmixLdInsn mmix paddr
+    when (isNothing mbInsn) $ error "fuck! shit!!"
+    runInsn mmix $ fromJust mbInsn
+
+-- }}}
+
+-- decodeInsn {{{
+decodeInsn :: Insn -> RunInsn
+decodeInsn insn = traceShow ("decode:", fst info) $ snd info
+  where info = insnOpMap ! iGetOPCode insn
+-- }}}
+
+-- runInsn {{{
+runInsn :: MMIX -> Insn -> IO ()
+runInsn mmix insn = do
+  -- keep current insn in special register
+  mmixSetSR mmix rTPIIx $ cast insn
+  rINS <- mmixGetSR mmix rINSIx
+  rop <- fldGet rXFrop <$> mmixGetSR mmix rRXIx
+  let runOP = if (rINS /= 0 && rop == 2)
+              then runSimReturn
+              else decodeInsn insn
+  runOP mmix insn
 -- }}}
 
 -- branch helper (use YZ) {{{
@@ -968,35 +935,71 @@ runPushOne mmix v = do
     runSetrOS mmix $ rO + 8
 -- }}}
 
--- runResume {{{
+-- runResume{0,1} {{{
 runResume :: MMIX -> Z -> IO ()
--- resume 0: use rX/rW/rY/rZ, resume from trip
-runResume mmix 0 = do
+runResume mmix 0 = runResume0 mmix
+runResume mmix 1 = runResume1 mmix
+runResume mmix _ = error "cannot resume xx"
+-- insert 1: XXX:not support
+-- insert 2: see runInsn
+-- insert 3: just insert new PTE entry (D/I both)
+
+-- resume 0: use r{X/W/Y/Z}, resume from trip {{{
+runResume0 :: MMIX -> IO ()
+runResume0 mmix = do
   rX <- mmixGetSR mmix rXIx
-  let insert = bitGet rXBsign rX == 0
-  let ropcode = fldGet rXFrop rX
   rW <- mmixGetSR mmix rWIx
-  when insert $ run0Insert mmix (rW - 4) ropcode
-  mmixSetPC mmix rW
+  let insertP = bitGet rXBsign rX == 0
+  let rop = fldGet rXFrop rX
+  if insertP
+  then
+    --if rop `elem` [0, 1, 2]
+    if rop `elem` [0, 2]
+    then do
+      rY <- mmixGetSR mmix rYIx
+      rZ <- mmixGetSR mmix rZIx
+      mmixSetSR mmix rRXIx rX
+      mmixSetSR mmix rRYIx rY
+      mmixSetSR mmix rRZIx rZ
+      mmixSetSR mmix rINSIx 1
+      mmixSetPC mmix (rW - 4)
+    else issueDTrapPb mmix
+  else mmixSetPC mmix rW
+-- }}}
 
-runResume mmix 1 = do
+-- Resume 1: use r{XX/WW/YY/ZZ/BB/255}, resume from trap {{{
+runResume1 :: MMIX -> IO ()
+runResume1 mmix = do
   rXX <- mmixGetSR mmix rXXIx
-  r255 <- mmixGetGR mmix 255
-  mmixSetSR mmix rKIx r255
-  rBB <- mmixGetSR mmix rBBIx
-  mmixSetGR mmix 255 rBB
-  let insert = bitGet rXXBsign rXX == 0
-  let ropcode = fldGet rXXFrop rXX
   rWW <- mmixGetSR mmix rWWIx
-  when insert $ run1Insert mmix (rWW - 4) ropcode
-  mmixSetPC mmix rWW
+  let insertP = bitGet rXXBsign rXX == 0
+  let rop = fldGet rXXFrop rXX
+  if insertP
+  then
+    --if rop `elem` [0, 1, 2, 3]
+    if rop `elem` [0, 2, 3] -- rop = 1 not support
+    then do
+      rYY <- mmixGetSR mmix rYYIx
+      rZZ <- mmixGetSR mmix rZZIx
+      mmixSetSR mmix rRXIx rXX
+      mmixSetSR mmix rRYIx rYY
+      mmixSetSR mmix rRZIx rZZ
+      mmixSetSR mmix rINSIx 1
+      mmixSetPC mmix (rWW - 4)
+      when (rop == 3) $ do
+        -- TODO:MMIX cannot known for I or D
+        mmixTCAddEntryD mmix rYY rZZ
+        mmixTCAddEntryI mmix rYY rZZ
+    else issueDTrapPb mmix
+  else mmixSetPC mmix rWW
+  trapped <- checkTrapped mmix
+  unless trapped $ do
+    r255 <- mmixGetGR mmix 255
+    mmixSetSR mmix rKIx r255
+    rBB <- mmixGetSR mmix rBBIx
+    mmixSetGR mmix 255 rBB
+-- }}}
 
-run0Insert :: MMIX -> VAddr -> Octa -> IO ()
-run0Insert mmix vaddr 0 = do undefined
-
-run1Insert :: MMIX -> VAddr -> Octa -> IO ()
-run1Insert mmix vaddr 0 = do undefined
-  
 -- }}}
 
 -- saveSRIxList: saved special registers {{{
@@ -1081,13 +1084,6 @@ incPC :: MMIX -> IO ()
 incPC mmix = do
   pc <- mmixGetPC mmix
   mmixSetPC mmix (pc + 4)
--- }}}
-
--- runInsn {{{
-runInsn :: MMIX -> Insn -> IO ()
-runInsn mmix insn = do
-  let runOP = insnOpMap ! iGetOPCode insn
-  runOP mmix insn
 -- }}}
 
 -- }}}
@@ -1198,9 +1194,24 @@ runInsnList =
   ]
 -- }}}
 
-insnOpMap :: Array Byte RunInsn
-insnOpMap = array (0,255) $ zip [0..255] runInsnList 
+type InsnInfo = (InsnOP, RunInsn)
 
+insnInfoList :: [InsnInfo]
+insnInfoList = zip insnOpList runInsnList
+
+insnOpMap :: Array Byte InsnInfo
+insnOpMap = array (0,255) $ zip [0..255] $ insnInfoList 
+
+-- }}}
+
+-- runSimReturn {{{
+runSimReturn :: RunInsn
+runSimReturn mmix insn = do
+  rRZ <- mmixGetSR mmix rRZIx
+  mmixSetGRX mmix insn rRZ
+  ae0 <- fldGet rAFEvent <$> mmixGetSR mmix rAIx
+  ae <- fldGet rXFae <$> mmixGetSR mmix rRXIx
+  mmixSetSR mmix rAIx $ ae0 .|. ae
 -- }}}
 
 -- 0* trap, floating +-/convert {{{
@@ -3875,3 +3886,5 @@ runTRIP mmix insn = do
 
 -- }}}
 
+-- Tips: `za` toggle folding; `zM` fold all; `zR` unfold all.
+-- vim: fdm=marker

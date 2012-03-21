@@ -9,7 +9,7 @@ module MMIX.OMem
 
 -- imports {{{
 
-import MMIX.Basics
+import MMIX.Base
 import Data.Bits (shiftR, shiftL)
 import Data.Array.MArray (newArray, readArray, writeArray)
 import Data.Array.IO (IOUArray)

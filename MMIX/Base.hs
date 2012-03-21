@@ -1,17 +1,15 @@
 -- Copyright 2012 Wu Xingbo <wuxb45@gmail.com>
--- Tips: `za` toggle folding; `zM` fold all; `zR` unfold all.
+-- ** Basic MMIX architecture.
 
 -- ghc options {{{
-
 {-# LANGUAGE TypeSynonymInstances #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE ExistentialQuantification #-}
-
 -- }}}
 
 -- module exports {{{
 
-module MMIX.Basics (
+module MMIX.Base (
 -- common helpers {{{
   cast, hx, traceShowIO,
   mapT2, mapT4, mapT8,
@@ -21,8 +19,8 @@ module MMIX.Basics (
   Octa, Tetra, Wyde, Byte,
   Addr, VAddr, PAddr, RAddr, BitIx, BitFld,
   Insn, OPCode, X, Y, Z, YZ, XYZ,
-  PTE, PTP,
-  FP,
+  PTE, PTP, TCKey, TCVal,
+  FP, SFP,
   OctaS, TetraS, WydeS, ByteS,
 -- }}}
 -- general bytes convertion {{{
@@ -61,14 +59,13 @@ module MMIX.Basics (
   rQIx, rUIx, rVIx, rGIx, rLIx, rAIx, rFIx, rPIx,
   rWIx, rXIx, rYIx, rZIx, rWWIx, rXXIx, rYYIx, rZZIx,
 
-  rQQIx, rTRIPIx, rTRAPIx,
+  rQQIx, rINSIx, rTRIPIx, rTRAPIx,
+  rRXIx, rRYIx, rRZIx, rTPIIx, rTPAIx,
 
   rKFlow, rKFprog, rKFhigh, rKFmachine,
-  rKFr, rKFw, rKFx, rKFn, rKFk, rKFb, rKFs, rKFp,
   rKBr, rKBw, rKBx, rKBn, rKBk, rKBb, rKBs, rKBp,
 
   rQFlow, rQFprog, rQFhigh, rQFmachine,
-  rQFr, rQFw, rQFx, rQFn, rQFk, rQFb, rQFs, rQFp,
   rQBr, rQBw, rQBx, rQBn, rQBk, rQBb, rQBs, rQBp,
 
   rVFb1,rVFb2,rVFb3,rVFb4,rVFs,rVFr,rVFn,rVFf,
@@ -77,21 +74,16 @@ module MMIX.Basics (
   rLFl, rLFZero,
 
   rAFEnable,
-  rAFEnableD,rAFEnableV,rAFEnableW,rAFEnableI,
-  rAFEnableO,rAFEnableU,rAFEnableZ,rAFEnableX,
   rABEnableD,rABEnableV,rABEnableW,rABEnableI,
   rABEnableO,rABEnableU,rABEnableZ,rABEnableX,
   rAFEvent,
-  rAFEventD, rAFEventV, rAFEventW, rAFEventI,
-  rAFEventO, rAFEventU, rAFEventZ, rAFEventX,
   rABEventD, rABEventV, rABEventW, rABEventI,
   rABEventO, rABEventU, rABEventZ, rABEventX,
   rAFRoundMode, rAFZero,
 
-  rXFsign, rXBsign, rXFinsn, rXFrop,
+  rXBsign, rXFinsn, rXFrop, rXFae,
 
-  rXXFsign, rXXBsign, rXXFinsn, rXXFrop, rXXFprog,
-  rXXFr, rXXFw, rXXFx, rXXFn, rXXFk, rXXFb, rXXFs, rXXFp,
+  rXXBsign, rXXFinsn, rXXFrop, rXXFprog,
   rXXBr, rXXBw, rXXBx, rXXBn, rXXBk, rXXBb, rXXBs, rXXBp,
 -- }}}
 -- general registers {{{
@@ -103,16 +95,36 @@ module MMIX.Basics (
   iGetXs, iGetYs, iGetZs, iGetYZs, iGetXYZs,
 -- }}}
 -- opcode {{{
-  InsnOP (..), deOPCode,
+  InsnOP (..), deOPCode, insnOpList,
 -- }}}
 -- address interface {{{
   Device (..),
 -- }}}
--- the MMIX machine {{{
-  MMIX (..),
+-- virtual address mapping {{{
+  vaddrFaddr, vaddrFseg, vaddrFsign, vaddrFtc,
+  pteFx, pteFay, pteFn, pteFp,
+  pteFpr, pteFpw, pteFpx, pteBpr, pteBpw, pteBpx,
+  ptpFc, ptpFn, ptpFq, ptpFnq,
+
+  vMapGetPTED0, vMapGetPTEI0,
+  vMapGetPTED, vMapGetPTEI,
+  vMapGetPAddr, vMapGetPTE,
+
+  TC, TCInfo (..), MMIXTC (..),
+
+  newMMIXTC, tcNewEntry, tcLookupPTE, tcKVToPTE,
+  mmixTCAddEntryD, mmixTCAddEntryI,
+  mmixTCDelEntryD, mmixTCDelEntryI,
+  mmixTCFlushD, mmixTCFlushI,
+-- }}}
+-- MMIX machine model {{{
+  MMIX (..), showMMIX,
   mmixGetPC, mmixSetPC,
   mmixGetSR, mmixSetSR,
   mmixGetGR, mmixSetGR,
+  mmixGetITC, mmixSetITC,
+  mmixGetDTC, mmixSetDTC,
+  mmixLdInsn,
   mmixLdOcta, mmixLdTetra, mmixLdWyde, mmixLdByte,
   mmixLdOcta0, mmixLdTetra0, mmixLdWyde0, mmixLdByte0,
   mmixStOcta, mmixStTetra, mmixStWyde, mmixStByte,
@@ -128,13 +140,6 @@ module MMIX.Basics (
   mmixGetGRZ, mmixGetGRSZ, mmixGetGRFZ,
   mmixGetGRYZ, mmixGetGRSYZ, mmixGetGRFYZ,
   mmixGetGRXY, mmixGetGRXYZ,
--- }}}
--- virtual address mapping {{{
-  vaddrFaddr, vaddrFseg, vaddrFsign,
-  pteFx, pteFay, pteFn, pteFp,
-  pteFpr, pteFpw, pteFpx, pteBpr, pteBpw, pteBpx,
-  ptpFc, ptpFn, ptpFq, ptpFnq,
-  --VF (..),
 -- }}}
 -- Trip and Trap {{{
   TRIP (..),
@@ -216,7 +221,6 @@ module MMIX.Basics (
 -- }}}
 
 -- imports {{{
---import System.IO.Unsafe (unsafePerformIO)
 import Prelude
        ( Maybe (..), Bool (..), IO (..), Ord (..),
          Integral (..), Ordering (..), Num (..), Real (..),
@@ -224,7 +228,8 @@ import Prelude
          Double, Float,
          (.), ($), (+), (-), (*), (/), (||), (&&),
          (>=), (<=), (<), (>),
-         fromIntegral, otherwise, fst, snd, id, error, undefined,
+         fromIntegral, otherwise, fst, snd,
+         id, error, undefined,
        )
 import Control.Applicative (Applicative (..), (<$>), (<*>))
 import Control.Monad (Monad (..), Functor (..), (>>=),
@@ -236,10 +241,12 @@ import Data.Bits (Bits (..), bit, shift, shiftR, shiftL,
                   (.&.), (.|.), complement, popCount)
 import Data.Eq (Eq (..))
 import Data.List (filter, map, head, zip, zipWith, take,
-                  (++), nub, foldl1', concat, concatMap)
+                  (++), nub, foldl1', concat, concatMap,
+                  reverse, length)
 import Data.Int (Int, Int64, Int32, Int16, Int8)
-import Data.Maybe (catMaybes, fromMaybe)
-import qualified Data.Map as Map (Map, fromList, (!))
+import Data.Maybe (catMaybes, fromMaybe, isJust, fromJust,)
+import qualified Data.Map as Map
+       (Map, fromList, (!), lookup, empty, insert, delete,)
 import Data.Ratio ((%))
 import Data.String (String (..))
 import Data.Word (Word64, Word32, Word16, Word8)
@@ -336,6 +343,8 @@ type XYZ    = (X,Y,Z) -- XYZ combined field
 
 type PTE    = Octa    -- Page Table Entry
 type PTP    = Octa    -- Page Table Pointer
+type TCKey  = Octa    -- Translation Cache Key
+type TCVal  = Octa    -- Translation Cache Value
 
 type FP     = Double  -- the floating-point type (64-bit)
 type SFP    = Float   -- short floating point (32-bit)
@@ -590,7 +599,7 @@ fldUMask = complement . fldMask
 fldGet :: (Bits a) => BitFld -> a -> a
 fldGet f@(_,r) v = (v .&. (fldMask f)) `shiftR` (cast r)
 
--- set field: field -> value -> orig
+-- set field: field -> value -> orig -> result
 fldSet :: (Bits a) => BitFld -> a -> a -> a
 fldSet f@(_,r) v orig =
   ((fldUMask f) .&. orig) .|. ((fldMask f) .&. (v `shiftL` (cast r)))
@@ -888,18 +897,42 @@ rZZIx = 31
 
 -- }}}
 
--- hidden special registers {{{
+-- hidden Special Registers {{{
 -- rQQ: keep rQ bits after previous GET
 rQQIx :: SRIx
 rQQIx = 32
 
--- rTRIP: signal trip
+-- rRSM: when exec inserted insn, set to 1
+rINSIx :: SRIx
+rINSIx = 33
+
+-- rTRIP: signal force-trip, one bit
 rTRIPIx :: SRIx
 rTRIPIx = 34
 
--- rTRAP: signal trap
+-- rTRAP: signal force-trap, one bit
 rTRAPIx :: SRIx
 rTRAPIx = 35
+
+-- rRX: rX or rXX
+rRXIx :: SRIx
+rRXIx = 36
+
+-- rRY: rX or rYY
+rRYIx :: SRIx
+rRYIx = 37
+
+-- rRZ: rZ or rZZ
+rRZIx :: SRIx
+rRZIx = 38
+
+-- rTPI: trxpped insn
+rTPIIx :: SRIx
+rTPIIx = 39
+
+-- rTPA: trxpped vaddr
+rTPAIx :: SRIx
+rTPAIx = 40
 
 -- }}}
 
@@ -926,30 +959,6 @@ rKFhigh = (31,8)
 
 rKFmachine :: BitFld
 rKFmachine = (7,0)
-
-rKFr :: BitFld
-rKFr = (39,39)
-
-rKFw :: BitFld
-rKFw = (38,38)
-
-rKFx :: BitFld
-rKFx = (37,37)
-
-rKFn :: BitFld
-rKFn = (36,36)
-
-rKFk :: BitFld
-rKFk = (35,35)
-
-rKFb :: BitFld
-rKFb = (34,34)
-
-rKFs :: BitFld
-rKFs = (33,33)
-
-rKFp :: BitFld
-rKFp = (32,32)
 
 rKBr :: BitIx
 rKBr = 39
@@ -991,30 +1000,6 @@ rQFhigh = (31,8)
 rQFmachine :: BitFld
 rQFmachine = (7,0)
 
-rQFr :: BitFld
-rQFr = (39,39)
-
-rQFw :: BitFld
-rQFw = (38,38)
-
-rQFx :: BitFld
-rQFx = (37,37)
-
-rQFn :: BitFld
-rQFn = (36,36)
-
-rQFk :: BitFld
-rQFk = (35,35)
-
-rQFb :: BitFld
-rQFb = (34,34)
-
-rQFs :: BitFld
-rQFs = (33,33)
-
-rQFp :: BitFld
-rQFp = (32,32)
-
 rQBr :: BitIx
 rQBr = 39
 
@@ -1038,7 +1023,6 @@ rQBs = 33
 
 rQBp :: BitIx
 rQBp = 32
-
 
 -- }}}
 
@@ -1098,40 +1082,17 @@ rLFZero = (63,8)
 
 -- Enable bits *8 {{{
 
+-- D: integer divide check
+-- V: integer overflow
+-- W: float-to-fix overflow
+-- I: invalid operation
+-- O: floating overflow
+-- U: floating underflow
+-- Z: floating division by zero
+-- X: floating inexact
+
 rAFEnable :: BitFld
 rAFEnable = (15,8)
-
--- D: integer divide check
-rAFEnableD :: BitFld
-rAFEnableD = (15,15)
-
--- V: integer overflow
-rAFEnableV :: BitFld
-rAFEnableV = (14,14)
-
--- W: float-to-fix overflow
-rAFEnableW :: BitFld
-rAFEnableW = (13,13)
-
--- I: invalid operation
-rAFEnableI :: BitFld
-rAFEnableI = (12,12)
-
--- O: floating overflow
-rAFEnableO :: BitFld
-rAFEnableO = (11,11)
-
--- U: floating underflow
-rAFEnableU :: BitFld
-rAFEnableU = (10,10)
-
--- Z: floating division by zero
-rAFEnableZ :: BitFld
-rAFEnableZ = (9,9)
-
--- X: floating inexact
-rAFEnableX :: BitFld
-rAFEnableX = (8,8)
 
 rABEnableD :: BitIx
 rABEnableD = 15
@@ -1157,37 +1118,12 @@ rABEnableZ = 9
 rABEnableX :: BitIx
 rABEnableX = 8
 
-
 -- }}}
 
 -- Event bits *8 {{{
 
 rAFEvent :: BitFld
 rAFEvent = (7,0)
-
-rAFEventD :: BitFld
-rAFEventD = (7,7)
-
-rAFEventV :: BitFld
-rAFEventV = (6,6)
-
-rAFEventW :: BitFld
-rAFEventW = (5,5)
-
-rAFEventI :: BitFld
-rAFEventI = (4,4)
-
-rAFEventO :: BitFld
-rAFEventO = (3,3)
-
-rAFEventU :: BitFld
-rAFEventU = (2,2)
-
-rAFEventZ :: BitFld
-rAFEventZ = (1,1)
-
-rAFEventX :: BitFld
-rAFEventX = (0,0)
 
 rABEventD :: BitIx
 rABEventD = 7
@@ -1238,8 +1174,8 @@ rAFZero = (63,18)
 
 -- rX fields {{{
 
-rXFsign :: BitFld
-rXFsign = (63,63)
+rXBsign :: BitIx
+rXBsign = 63
 
 rXFinsn :: BitFld
 rXFinsn = (31,0)
@@ -1247,15 +1183,12 @@ rXFinsn = (31,0)
 rXFrop :: BitFld
 rXFrop = (62,56)
 
-rXBsign :: BitIx
-rXBsign = 63
+rXFae :: BitFld
+rXFae = (47,40)
 
 -- }}}
 
 -- rXX fields {{{
-
-rXXFsign :: BitFld
-rXXFsign = (63,63)
 
 rXXBsign :: BitIx
 rXXBsign = 63
@@ -1268,30 +1201,6 @@ rXXFrop = (62,56)
 
 rXXFprog :: BitFld
 rXXFprog = (39,32)
-
-rXXFr :: BitFld
-rXXFr = rQFr
-
-rXXFw :: BitFld
-rXXFw = rQFw
-
-rXXFx :: BitFld
-rXXFx = rQFx
-
-rXXFn :: BitFld
-rXXFn = rQFn
-
-rXXFk :: BitFld
-rXXFk = rQFk
-
-rXXFb :: BitFld
-rXXFb = rQFb
-
-rXXFs :: BitFld
-rXXFs = rQFs
-
-rXXFp :: BitFld
-rXXFp = rQFp
 
 rXXBr :: BitIx
 rXXBr = rQBr
@@ -1488,8 +1397,8 @@ data InsnOP
 -- }}}
 
 -- opList, from index 0 to 255 {{{
-opList :: [InsnOP]
-opList =
+insnOpList :: [InsnOP]
+insnOpList =
   [ TRAP, FCMP, FUN, FEQL, FADD, FIX, FSUB, FIXU -- #00 ~ #07
   , FLOT, FLOTI, FLOTU, FLOTUI, SFLOT, SFLOTI, SFLOTU, SFLOTUI -- #08 ~ #0f
   , FMUL, FCMPE, FUNE, FEQLE, FDIV, FSQRT, FREM, FINT
@@ -1538,7 +1447,7 @@ opIxList :: [OPCode]
 opIxList = [0 .. 255]
 
 opListMap :: [(OPCode, InsnOP)]
-opListMap = zip opIxList opList
+opListMap = zip opIxList insnOpList
 
 opMap :: Map.Map OPCode InsnOP
 opMap = Map.fromList opListMap
@@ -1623,6 +1532,385 @@ class Device dev where
 
 -- }}}
 
+-- Virtual address mapping {{{
+
+-- VAddr (virtual address) fields {{{
+
+vaddrFaddr :: BitFld
+vaddrFaddr = (60, 0)
+
+vaddrFseg :: BitFld
+vaddrFseg = (62, 61)
+
+vaddrFsign :: BitFld
+vaddrFsign = (63, 63)
+
+vaddrFtc :: BitFld
+vaddrFtc = (63, 13)
+
+-- }}}
+
+-- PTE (page table entry) {{{
+
+pteFx :: BitFld
+pteFx = (63,48)
+
+pteFay :: BitFld
+pteFay = (47,13)
+
+pteFn :: BitFld
+pteFn = (12,3)
+
+pteFp :: BitFld
+pteFp = (2,0)
+
+pteFpr :: BitFld
+pteFpr = (2,2)
+
+pteFpw :: BitFld
+pteFpw = (1,1)
+
+pteFpx :: BitFld
+pteFpx = (0,0)
+
+pteBpr :: BitIx
+pteBpr = 2
+
+pteBpw :: BitIx
+pteBpw = 1
+
+pteBpx :: BitIx
+pteBpx = 0
+
+-- }}}
+
+-- PTP (page table pointer) {{{
+
+ptpFc :: BitFld
+ptpFc = (62,13)
+
+ptpFn :: BitFld
+ptpFn = (12,3)
+
+ptpFq :: BitFld
+ptpFq = (2,0)
+
+ptpFnq :: BitFld
+ptpFnq = (12,0)
+
+-- }}}
+
+-- PTE operation {{{
+
+-- vMapGetPTED0: lookup PTE, on fail returns 0 {{{
+vMapGetPTED0 :: MMIX -> VAddr -> IO PTE
+vMapGetPTED0 mmix vaddr = fromMaybe 0 <$> vMapGetPTED mmix vaddr
+-- }}}
+
+-- vMapGetPTEI0: lookup PTE, on fail returns 0 {{{
+vMapGetPTEI0 :: MMIX -> VAddr -> IO PTE
+vMapGetPTEI0 mmix vaddr = fromMaybe 0 <$> vMapGetPTEI mmix vaddr
+-- }}}
+
+-- vMapGetPTED: MMIX -> VAddr -> IO (Maybe PTE) {{{
+vMapGetPTED :: MMIX -> VAddr -> IO (Maybe PTE)
+vMapGetPTED mmix vaddr = do
+  rV <- mmixGetSR mmix rVIx
+  dtc <- mmixGetDTC mmix
+  let mbInTC = tcLookupPTE dtc rV vaddr
+  if isJust mbInTC
+  then return mbInTC
+  else do
+    mbPTE <- vMapGetPTE mmix vaddr
+    when (isJust mbPTE) $ mmixTCAddEntryD mmix vaddr $ fromJust mbPTE
+    return mbPTE
+-- }}}
+
+-- vMapGetPTEI: MMIX -> VAddr -> IO (Maybe PTE) {{{
+vMapGetPTEI :: MMIX -> VAddr -> IO (Maybe PTE)
+vMapGetPTEI mmix vaddr = do
+  rV <- mmixGetSR mmix rVIx
+  itc <- mmixGetDTC mmix
+  let mbInTC = tcLookupPTE itc rV vaddr
+  if isJust mbInTC
+  then return mbInTC
+  else do
+    mbPTE <- vMapGetPTE mmix vaddr
+    when (isJust mbPTE) $ mmixTCAddEntryI mmix vaddr $ fromJust mbPTE
+    return mbPTE
+-- }}}
+
+-- vMapGetPTE: lookup PTE in memory {{{
+vMapGetPTE :: MMIX -> VAddr -> IO (Maybe PTE)
+vMapGetPTE mmix vaddr = do
+  rV <- mmixGetSR mmix rVIx -- no fail
+  let mbVMapParam = vMapPrepare vaddr rV
+  let mbStartPoint = mbVMapParam >>= vMapStartPoint
+  case mbStartPoint of
+    Just point -> vMapLookup mmix point
+    Nothing -> return Nothing
+-- }}}
+
+-- vMapGetPAddr: rV -> VAddr -> PTE -> PAddr {{{
+vMapGetPAddr :: Octa -> Octa -> Octa -> PAddr
+vMapGetPAddr rV vaddr pte = a .|. offset
+  -- make sure 13 <= s <= 48
+  where
+    s = fldGet rVFs rV
+    s' = max 13 $ min 48 s
+    a = fldGetRaw (48, s') pte
+    offset = fldGetRaw (s' - 1, 0) vaddr
+-- }}}
+
+-- helper functions {{{
+
+-- type VMapParam: (base, limit, pn, nval) {{{
+type VMapParam = (Octa, Octa, Octa, Octa)
+-- }}}
+
+-- type VStartPoint: (nval, len, indexList) {{{
+type VStartPoint = (Octa, Octa, [Octa])
+-- }}}
+
+-- vMapChecks (check s field) {{{
+-- helper function, called by vMapPrepare
+vMapChecks :: Octa -> Bool
+vMapChecks rV = (s >= 13) && (s <= 48)
+  where s = fldGet rVFs rV
+-- }}}
+
+-- prepare parameters for recursive find PTE {{{
+-- helper function, called by vMapGetPTE
+vMapPrepare :: VAddr -> Octa -> Maybe VMapParam
+vMapPrepare vaddr rV = 
+  if vMapChecks rV
+  then Just (base, limit, pn, nval)
+  else Nothing
+  where
+    seg = fldGet vaddrFseg vaddr
+    (b,bp) = case seg of
+      0 -> (0, fldGet rVFb1 rV)
+      1 -> (fldGet rVFb1 rV, fldGet rVFb2 rV)
+      2 -> (fldGet rVFb2 rV, fldGet rVFb3 rV)
+      3 -> (fldGet rVFb3 rV, fldGet rVFb4 rV)
+    raddr  = bitSet1 63 $ fldGetRaw rVFr rV
+    base   = (b `shiftL` 13) + raddr
+    virt   = fldSet0 (63,61) vaddr
+    s      = fldGet rVFs rV
+    pn     = virt `shiftR` (cast s)
+    limit  = (bp `shiftL` 13) + raddr + (if pn == 0 then 1 else 0)
+    nval   = bitSet1 63 $ fldGetRaw rVFn rV
+-- }}}
+
+-- guard for check n field match ptp {{{
+-- helper function, called by vMapLookup
+vMapGuardPTP :: Octa -> PTP -> Maybe PTP
+vMapGuardPTP nval ptp =
+  if (ptp `xor` nval) .&. ptpmask == 0
+  then return ptp
+  else Nothing
+  -- check bit 63 and <n>
+  where ptpmask = fldMask (63,63) .|. fldMask rVFn
+-- }}}
+
+-- guard for check n field match pte {{{
+-- helper function, called by vMapLookup
+vMapGuardPTE :: Octa -> PTE -> Maybe PTE
+vMapGuardPTE nval pte =
+  if (pte `xor` nval) .&. ptemask == 0
+  then return pte
+  else Nothing
+  -- check <n>
+  where ptemask = fldMask rVFn
+-- }}}
+
+-- guard for base < limit {{{
+-- helper function, called by vMapStartPoint
+vMapGuardLimit :: Octa -> Octa -> a -> Maybe a
+vMapGuardLimit base limit a =
+  if base < limit then return a else Nothing
+-- }}}
+
+-- convert page-number to page-index list {{{
+-- helper function, called by vMapStartPoint
+vMapGetPIxList :: Octa -> [Octa]
+vMapGetPIxList = reverse . splitPn
+  where
+    splitPn 0 = []
+    splitPn pn = pnIx:(splitPn pnShift)
+      where
+        pnShift = fldGet (63,10) pn
+        pnIx = fldGet (9,0) pn
+-- }}}
+
+-- get the start point of lookup: [base, idx-list] {{{
+-- helper function, called by vMapGetPTE
+vMapStartPoint :: VMapParam -> Maybe VStartPoint
+vMapStartPoint (base, limit, pn, nval) =
+  if len < 1 || len > 5
+  then Nothing
+  else Just (nval, base', pageIxList) >>= vMapGuardLimit base' limit
+  where
+    pageIxList = vMapGetPIxList pn
+    len = cast $ length pageIxList :: Octa
+    base' = base + ((len - 1) * 0x2000)
+-- }}}
+
+-- load PTX (PTE/PTP) from Memory {{{
+-- helper function, called by vMapLookup
+vMapLoadPTX :: MMIX -> PAddr -> PAddr -> IO (Maybe Octa)
+vMapLoadPTX mmix base index = mmixLdOcta mmix $ base + (index `shiftL` 3)
+-- }}}
+
+-- load (valid) PTE (maybe plus some PTP) {{{
+-- helper function, called by vMapGetPTE
+vMapLookup :: MMIX -> VStartPoint -> IO (Maybe PTE)
+vMapLookup mmix (nval, base, [ix]) = do
+  mbPTE <- vMapLoadPTX mmix base ix
+  return $ mbPTE >>= vMapGuardPTE nval
+
+vMapLookup mmix (nval, base, ix:ixs) = do
+  mbPTP <- vMapLoadPTX mmix base ix
+  case mbPTP >>= vMapGuardPTP nval >>= Just . fldSet0 ptpFnq of
+    Just ptp -> vMapLookup mmix (nval, ptp, ixs)
+    Nothing -> return Nothing
+-- }}}
+
+-- }}}
+
+-- }}}
+
+-- TCKey fields {{{
+tcKeyfi :: BitFld
+tcKeyfi = (62, 61)
+
+tcKeyfv :: BitFld
+tcKeyfv = (60, 13)
+
+tcKeyfn :: BitFld
+tcKeyfn = (12, 3)
+
+tcKeyva :: BitFld
+tcKeyva = (63, 13)
+-- }}}
+
+-- TCVal fields {{{
+tcValfa :: BitFld
+tcValfa = (37, 3)
+
+tcValfp :: BitFld
+tcValfp = (2, 0)
+-- }}}
+
+-- TC, TCInfo, MMIXTC {{{
+
+type TC = Map.Map TCKey TCInfo
+
+data TCInfo = TCInfo
+  { tciVal :: Octa
+  , tciTS  :: Octa
+  , tciCT  :: Octa }
+
+data MMIXTC = MMIXTC
+  { tcInsn :: IORef TC
+  , tcData :: IORef TC }
+
+-- }}}
+
+-- TC operation {{{
+
+-- newMMIXTC {{{
+newMMIXTC :: IO MMIXTC
+newMMIXTC = do
+  iTC <- newIORef $ Map.empty
+  dTC <- newIORef $ Map.empty
+  return $ MMIXTC iTC dTC
+-- }}}
+
+-- tcNewEntry: make tc entry from {time-stamp, rV, VAddr, PTE} {{{
+tcNewEntry :: Octa -> Octa -> VAddr -> PTE -> (TCKey, TCInfo)
+tcNewEntry ts rV vaddr pte = (key, val)
+  where
+    s = fldGet rVFs rV
+    n = fldGet rVFn rV
+    p = fldGet pteFp pte
+    ay = fldGet pteFay pte
+    key = (fldGetRaw (63, s) vaddr) .|. (fldGetRaw (12,3) rV)
+    val = TCInfo trans ts 0
+    trans = fldSet tcValfa ay p
+-- }}}
+
+-- tcLookupPTE: loopup in Insn-TC {{{
+tcLookupPTE :: TC -> Octa -> VAddr -> Maybe PTE
+tcLookupPTE tc rV vaddr = tcKVToPTE key <$> mbVal
+  where
+    n = fldGet rVFn rV
+    vaRaw = fldGetRaw vaddrFtc vaddr
+    key = fldSet tcKeyfn n vaRaw
+    mbVal = tciVal <$> Map.lookup key tc
+-- }}}
+
+-- tcValToPTE: convert tcVal to PTE {{{
+tcKVToPTE :: TCKey -> TCVal -> PTE
+tcKVToPTE k v = fldSet pteFay ay $ fldSet pteFn n p
+  where
+    ay = fldGet tcValfa v
+    p = fldGet tcValfp v
+    n = fldGet tcKeyfn k
+-- }}}
+
+-- mmixTCAddEntryD {{{
+mmixTCAddEntryD :: MMIX -> VAddr -> PTE -> IO ()
+mmixTCAddEntryD mmix vaddr pte = do
+  ts <- mmixGetSR mmix rIIx
+  rV <- mmixGetSR mmix rVIx
+  let (k,i) = tcNewEntry ts rV vaddr pte
+  dtc <- mmixGetDTC mmix
+  let dtc' = Map.insert k i dtc
+  mmixSetDTC mmix dtc'
+-- }}}
+
+-- mmixTCAddEntryI {{{
+mmixTCAddEntryI :: MMIX -> VAddr -> PTE -> IO ()
+mmixTCAddEntryI mmix vaddr pte = do
+  ts <- mmixGetSR mmix rIIx
+  rV <- mmixGetSR mmix rVIx
+  let (k,i) = tcNewEntry ts rV vaddr pte
+  itc <- mmixGetITC mmix
+  let itc' = Map.insert k i itc
+  mmixSetITC mmix itc'
+-- }}}
+
+-- mmixTCDelEntryD {{{
+mmixTCDelEntryD :: MMIX -> TCKey -> IO ()
+mmixTCDelEntryD mmix key = do
+  dtc <- mmixGetDTC mmix
+  let dtc' = Map.delete key dtc
+  mmixSetDTC mmix dtc'
+-- }}}
+
+-- mmixTCDelEntryI {{{
+mmixTCDelEntryI :: MMIX -> TCKey -> IO ()
+mmixTCDelEntryI mmix key = do
+  itc <- mmixGetITC mmix
+  let itc' = Map.delete key itc
+  mmixSetITC mmix itc'
+-- }}}
+
+-- mmixTCFlushD {{{
+mmixTCFlushD :: MMIX -> IO ()
+mmixTCFlushD mmix = mmixSetDTC mmix Map.empty
+-- }}}
+
+-- mmixTCFlushI {{{
+mmixTCFlushI :: MMIX -> IO ()
+mmixTCFlushI mmix = mmixSetITC mmix Map.empty
+-- }}}
+
+-- }}}
+
+-- }}}
+
 -- MMIX machine model {{{
 
 -- the MMIX {{{
@@ -1631,12 +1919,13 @@ class Device dev where
 --   256 GR
 --   some memory-mapped devices.
 data MMIX =
-  forall dev.  (Device dev) =>
+  forall dev. (Device dev) =>
   MMIX
-  { mmixPC   :: IORef VAddr
-  , mmixSRD  :: RD
-  , mmixGRD  :: GRD
-  , mmixDev  :: dev
+  { mmixPC  :: IORef VAddr
+  , mmixSRD :: RD
+  , mmixGRD :: GRD
+  , mmixTC  :: MMIXTC
+  , mmixDev :: dev
   }
 
 showMMIX :: MMIX -> IO ()
@@ -1655,7 +1944,7 @@ showMMIXGRD mmix = do
   let rIdList = take (cast l) [0 ..] ++ [g .. 255]
   rVList <- mapM (mmixGetGR mmix) rIdList
   putStrLn $ concat $ zipWith (showR) (map show rIdList) rVList
-  
+
 -- }}}
 
 -- PC {{{
@@ -1707,18 +1996,37 @@ mmixSetGR mmix ix v = do
 
 -- }}}
 
+-- TC {{{
+mmixGetDTC :: MMIX -> IO TC
+mmixGetDTC = readIORef . tcData . mmixTC
+
+mmixGetITC :: MMIX -> IO TC
+mmixGetITC = readIORef . tcInsn . mmixTC
+
+mmixSetDTC :: MMIX -> TC -> IO ()
+mmixSetDTC = writeIORef . tcData . mmixTC
+
+mmixSetITC :: MMIX -> TC -> IO ()
+mmixSetITC = writeIORef . tcInsn . mmixTC
+
+-- }}}
+
 -- memory-mapped devices {{{
+-- TODO: can we avoid pattern-matching?
+mmixLdInsn :: MMIX -> PAddr -> IO (Maybe Tetra)
+mmixLdInsn = mmixLdTetra
+
 mmixLdOcta :: MMIX -> PAddr -> IO (Maybe Octa)
-mmixLdOcta (MMIX _ _ _ dev) = devReadOcta dev
+mmixLdOcta (MMIX _ _ _ _ dev) = devReadOcta dev
 
 mmixLdTetra :: MMIX -> PAddr -> IO (Maybe Tetra)
-mmixLdTetra (MMIX _ _ _ dev) = devReadTetra dev
+mmixLdTetra (MMIX _ _ _ _ dev) = devReadTetra dev
 
 mmixLdWyde :: MMIX -> PAddr -> IO (Maybe Wyde)
-mmixLdWyde (MMIX _ _ _ dev) = devReadWyde dev
+mmixLdWyde (MMIX _ _ _ _ dev) = devReadWyde dev
 
 mmixLdByte :: MMIX -> PAddr -> IO (Maybe Byte)
-mmixLdByte (MMIX _ _ _ dev) = devReadByte dev
+mmixLdByte (MMIX _ _ _ _ dev) = devReadByte dev
 
 mmixLdOcta0 :: MMIX -> PAddr -> IO Octa
 mmixLdOcta0 mmix paddr = fromMaybe 0 `fmap` mmixLdOcta mmix paddr
@@ -1733,16 +2041,16 @@ mmixLdByte0 :: MMIX -> PAddr -> IO Byte
 mmixLdByte0 mmix paddr = fromMaybe 0 `fmap` mmixLdByte mmix paddr
 
 mmixStOcta :: MMIX -> PAddr -> Octa -> IO Bool
-mmixStOcta (MMIX _ _ _ dev) = devWriteOcta dev
+mmixStOcta (MMIX _ _ _ _ dev) = devWriteOcta dev
 
 mmixStTetra :: MMIX -> PAddr -> Tetra -> IO Bool
-mmixStTetra (MMIX _ _ _ dev) = devWriteTetra dev
+mmixStTetra (MMIX _ _ _ _ dev) = devWriteTetra dev
 
 mmixStWyde :: MMIX -> PAddr -> Wyde -> IO Bool
-mmixStWyde (MMIX _ _ _ dev) = devWriteWyde dev
+mmixStWyde (MMIX _ _ _ _ dev) = devWriteWyde dev
 
 mmixStByte :: MMIX -> PAddr -> Byte -> IO Bool
-mmixStByte (MMIX _ _ _ dev) = devWriteByte dev
+mmixStByte (MMIX _ _ _ _ dev) = devWriteByte dev
 -- }}}
 
 -- minimum MMIX with ZDev {{{
@@ -1757,7 +2065,12 @@ instance Device ZDev where
 -- }}}
 
 newDummyMMIX :: IO MMIX
-newDummyMMIX = MMIX <$> newIORef (1 `shiftL` 63) <*> newSRD <*> newGRD <*> return ZDev
+newDummyMMIX = MMIX
+  <$> newIORef (1 `shiftL` 63)
+  <*> newSRD
+  <*> newGRD
+  <*> newMMIXTC
+  <*> return ZDev
 
 -- }}}
 
@@ -1876,80 +2189,6 @@ mmixGetGRXYZ mmix insn = do
   y <- mmixGetGR mmix $ iGetY insn
   z <- mmixGetGR mmix $ iGetZ insn
   return (x, y, z)
--- }}}
-
--- }}}
-
--- Virtual address mapping {{{
-
--- virtual address fields {{{
-
-vaddrFaddr :: BitFld
-vaddrFaddr = (60,0)
-
-vaddrFseg :: BitFld
-vaddrFseg = (62,61)
-
-vaddrFsign :: BitFld
-vaddrFsign = (63,63)
-
--- }}}
-
--- page table entry {{{
-
-pteFx :: BitFld
-pteFx = (63,48)
-
-pteFay :: BitFld
-pteFay = (47,13)
-
-pteFn :: BitFld
-pteFn = (12,3)
-
-pteFp :: BitFld
-pteFp = (2,0)
-
-pteFpr :: BitFld
-pteFpr = (2,2)
-
-pteFpw :: BitFld
-pteFpw = (1,1)
-
-pteFpx :: BitFld
-pteFpx = (0,0)
-
-pteBpr :: BitIx
-pteBpr = 2
-
-pteBpw :: BitIx
-pteBpw = 1
-
-pteBpx :: BitIx
-pteBpx = 0
-
--- }}}
-
--- page table pointer {{{
-
-ptpFc :: BitFld
-ptpFc = (62,13)
-
-ptpFn :: BitFld
-ptpFn = (12,3)
-
-ptpFq :: BitFld
-ptpFq = (2,0)
-
-ptpFnq :: BitFld
-ptpFnq = (12,0)
-
--- }}}
-
--- virtual address function {{{
-
--- read/write/execute
---data VF = VFR | VFW | VFX
-
 -- }}}
 
 -- }}}
@@ -3717,5 +3956,5 @@ fpSFloatu r o = sfpPack r (Number s e f) >>= fpPack r . sfpUnpack
 
 -- }}}
 
+-- Tips: `za` toggle folding; `zM` fold all; `zR` unfold all.
 -- vim: fdm=marker
-
