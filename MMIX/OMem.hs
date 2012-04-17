@@ -1,11 +1,14 @@
 -- Copyright 2012 Wu Xingbo <wuxb45@gmail.com>
+-- ** OMem: Memory Device with Octa entries (IOUArray)
 
+-- module exports {{{
 module MMIX.OMem
   ( OMem(..)
-  , makeOMem
+  , newOMem
   , octaIx
   ) 
   where
+-- }}}
 
 -- imports {{{
 
@@ -16,14 +19,17 @@ import Data.Array.IO (IOUArray)
 
 -- }}}
 
-data OMem = OMem { omemBound :: (PAddr, PAddr)
-                 , omemData :: IOUArray PAddr Octa
-                 }
+-- OMem {{{
+data OMem = OMem
+  { omemBound :: (PAddr, PAddr)
+  , omemData  :: IOUArray PAddr Octa
+  }
+-- }}}
 
 -- makeOMem {{{
 
-makeOMem :: (PAddr, PAddr) -> IO OMem
-makeOMem (l,r) = do
+newOMem :: (PAddr, PAddr) -> IO OMem
+newOMem (l,r) = do
   let lix = l `shiftR` 3
   let rix = r `shiftR` 3
   let l' = lix `shiftL` 3
@@ -44,10 +50,10 @@ octaIx addr = addr `shiftR` 3
 
 -- OMem is Device
 instance Device OMem where
-  devAddrOk omem addr = l <= addr && r > addr
+  devAddrOk omem addr = l <= addr && addr < r
     where (l, r) = omemBound omem
 
-  devReadOcta omem paddr = do 
+  devReadOcta omem paddr = do
     if devAddrOk omem paddr
     then do
       val <- readArray (omemData omem) (octaIx paddr)
@@ -62,34 +68,6 @@ instance Device OMem where
       return True
     else
       return False
-
-{- deprecated
-  -- read Octa
-  devRead omem addr readtype =
-    if devAddrOk omem addr
-    then do
-      oval <- devRawRead omem addr
-      return $ case readtype of
-        AReadOcta  -> AReadOkOcta  oval
-        AReadTetra -> AReadOkTetra $ xot addr oval
-        AReadWyde  -> AReadOkWyde  $ xow addr oval
-        AReadByte  -> AReadOkByte  $ xob addr oval
-    else return AReadFail
-
-  -- Write Octa
-  devWrite omem addr writetype =
-    if devAddrOk omem addr
-    then do
-      origval <- devRawRead omem addr
-      let newOcta = case writetype of
-            AWriteOcta  oval -> oval
-            AWriteTetra tval -> mot addr origval tval
-            AWriteWyde  wval -> mow addr origval wval
-            AWriteByte  bval -> mob addr origval bval
-      devRawWrite omem addr newOcta
-      return AWriteOk
-    else return AWriteFail
--}
 
 -- }}}
 
