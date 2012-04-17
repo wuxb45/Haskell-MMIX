@@ -2017,16 +2017,16 @@ mmixLdInsn :: MMIX -> PAddr -> IO (Maybe Tetra)
 mmixLdInsn = mmixLdTetra
 
 mmixLdOcta :: MMIX -> PAddr -> IO (Maybe Octa)
-mmixLdOcta (MMIX _ _ _ _ dev) = devReadOcta dev
+mmixLdOcta MMIX { mmixDev = dev } = devReadOcta dev
 
 mmixLdTetra :: MMIX -> PAddr -> IO (Maybe Tetra)
-mmixLdTetra (MMIX _ _ _ _ dev) = devReadTetra dev
+mmixLdTetra MMIX { mmixDev = dev } = devReadTetra dev
 
 mmixLdWyde :: MMIX -> PAddr -> IO (Maybe Wyde)
-mmixLdWyde (MMIX _ _ _ _ dev) = devReadWyde dev
+mmixLdWyde MMIX { mmixDev = dev } = devReadWyde dev
 
 mmixLdByte :: MMIX -> PAddr -> IO (Maybe Byte)
-mmixLdByte (MMIX _ _ _ _ dev) = devReadByte dev
+mmixLdByte MMIX { mmixDev = dev } = devReadByte dev
 
 mmixLdOcta0 :: MMIX -> PAddr -> IO Octa
 mmixLdOcta0 mmix paddr = fromMaybe 0 `fmap` mmixLdOcta mmix paddr
@@ -2041,16 +2041,16 @@ mmixLdByte0 :: MMIX -> PAddr -> IO Byte
 mmixLdByte0 mmix paddr = fromMaybe 0 `fmap` mmixLdByte mmix paddr
 
 mmixStOcta :: MMIX -> PAddr -> Octa -> IO Bool
-mmixStOcta (MMIX _ _ _ _ dev) = devWriteOcta dev
+mmixStOcta MMIX { mmixDev = dev } = devWriteOcta dev
 
 mmixStTetra :: MMIX -> PAddr -> Tetra -> IO Bool
-mmixStTetra (MMIX _ _ _ _ dev) = devWriteTetra dev
+mmixStTetra MMIX { mmixDev = dev } = devWriteTetra dev
 
 mmixStWyde :: MMIX -> PAddr -> Wyde -> IO Bool
-mmixStWyde (MMIX _ _ _ _ dev) = devWriteWyde dev
+mmixStWyde MMIX { mmixDev = dev } = devWriteWyde dev
 
 mmixStByte :: MMIX -> PAddr -> Byte -> IO Bool
-mmixStByte (MMIX _ _ _ _ dev) = devWriteByte dev
+mmixStByte MMIX { mmixDev = dev } = devWriteByte dev
 -- }}}
 
 -- minimum MMIX with ZDev {{{
