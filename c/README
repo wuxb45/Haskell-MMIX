@@ -1,0 +1,3 @@
+These C files are derived from MMIX-Ware on D. E. Knuth's offical web site.
+
+I splitted the C part from CWeb files and added some comments. Mostly on Arith.
