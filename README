@@ -1,0 +1,15 @@
+****Haskell MMIX
+This is a full Haskell implementation of MMIX machine.
+I have finished the full CPU. but not implement any devices yet.
+
+****Diff
+One difference with the MMIX documentation is that Haskell-MMIX don't support
+ropcode 1 of RESUME Insn. This is because, as far as I know, you can always
+use ropcode 2 to simulate any Insn, and ropcode 1 makes the system too complex.
+
+****Usage
+As we don't have devices, we cannot run programs on it now. Cool!
+But in fact, you can run TRAP Insn with Zero-dev (a dev with only Zero). Cool!
+
+****Author
+Wu Xingbo <wuxb45@gmail.com>
