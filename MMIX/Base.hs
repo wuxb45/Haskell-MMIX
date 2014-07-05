@@ -237,8 +237,7 @@ import Control.Monad (Monad (..), Functor (..), (>>=),
 import Data.Array.IO (IOUArray)
 import Data.Array.MArray (MArray, newArray, getElems,
                           readArray, writeArray)
-import Data.Bits (Bits (..), bit, shift, shiftR, shiftL,
-                  (.&.), (.|.), complement, popCount)
+import Data.Bits (Bits (..), FiniteBits(..))
 import Data.Eq (Eq (..))
 import Data.List (filter, map, head, zip, zipWith, take,
                   (++), nub, foldl1', concat, concatMap,
@@ -587,9 +586,7 @@ bitSet0 i v = v .&. (bitUMask i)
 
 -- mask a field
 fldMask :: (Bits a) => BitFld -> a
-fldMask (l,r) = lb .|. (lb - rb)
-  where lb = bit $ cast l
-        rb = bit $ cast r
+fldMask (l,r) = foldl1' (.|.) $ map (bit . cast) [r..l]
 
 -- unmask a field
 fldUMask :: (Bits a) => BitFld -> a
@@ -625,19 +622,20 @@ fldSet0 f v = v .&. (fldUMask f)
 -- sign extend {{{
 
 -- signExt: sign bit -> value -> extended
-signExt :: (Bits a) => BitIx -> a -> a
-signExt b v = case bitGet b v of
-  0 -> v
-  1 -> fldSet (hiBit, min b hiBit) (-1) v
-  where hiBit = cast $ (bitSize v) - 1
+signExt :: (FiniteBits a) => BitIx -> a -> a
+signExt b v = if testBit v (cast b) then fldSet fld allOne v else v
+  where
+    fld = (hiBit, min b hiBit)
+    hiBit = cast $ (finiteBitSize v) - 1
+    allOne = complement zeroBits
 
-signExtByte :: (Bits a) => a -> a
+signExtByte :: (FiniteBits a) => a -> a
 signExtByte = signExt 7
 
-signExtWyde :: (Bits a) => a -> a
+signExtWyde :: (FiniteBits a) => a -> a
 signExtWyde = signExt 15
 
-signExtTetra :: (Bits a) => a -> a
+signExtTetra :: (FiniteBits a) => a -> a
 signExtTetra = signExt 31
 
 signExtByteOcta :: Byte -> Octa
@@ -2493,7 +2491,17 @@ instance Bits Hexadeca where
           b1 | b >= 0 = b0 - 128
              | b < 0 = b0 + 128
   bitSize _ = 128
+  bitSizeMaybe _ = Just 128
+  testBit v n = (bit n .&. v) /= zeroBits
+  zeroBits = HD 0 0
+  bit n = (HD 0 1) `shift` n
   isSigned _ = False
+  popCount (HD ah al) = popCount ah + popCount al
+-- }}}
+
+-- instance: FiniteBits {{{
+instance FiniteBits Hexadeca where
+  finiteBitSize _ = 128
 -- }}}
 
 -- instance: Integral (quotRem) {{{
@@ -2932,7 +2940,7 @@ instance Ord FSign where
 
 -- from 0 or 1
 toFSign :: (Bits a) => a -> FSign
-toFSign sbit = if sbit == 0 then FPositive else FNegative
+toFSign sbit = if sbit == zeroBits then FPositive else FNegative
 
 -- from 0x8000000000000000 or 0x0
 toFSignRaw :: Octa -> FSign
